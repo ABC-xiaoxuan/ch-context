@@ -10,5 +10,8 @@ License: Apache License, Version 2.0
 CodexHost integration, data source and related changes:
 Copyright 2026 ABC-xiaoxuan and ch-context contributors
 
+The browser bundle also includes Marked; its notices are reproduced in
+THIRD_PARTY_NOTICES.md.
+
 The original source history and LICENSE are retained. This notice does not
 imply endorsement by the upstream author, CodexHost or DeepSeek.

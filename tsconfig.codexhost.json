@@ -12,5 +12,11 @@
     "skipLibCheck": true,
     "types": ["node", "react", "react-dom"]
   },
-  "include": ["src/codexhost/**/*.ts", "src/codexhost/**/*.tsx", "tests/codexhost/**/*.ts"]
+  "include": [
+    "src/codexhost/**/*.ts",
+    "src/codexhost/**/*.tsx",
+    "src/market/**/*.ts",
+    "src/market/**/*.tsx",
+    "tests/codexhost/**/*.ts"
+  ]
 }

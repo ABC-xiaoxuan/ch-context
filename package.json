@@ -1,7 +1,7 @@
 {
   "name": "ch-context",
-  "version": "0.1.0",
-  "description": "Read-only context and usage insights for CodexHost Web, adapted from dsh-context.",
+  "version": "0.2.0",
+  "description": "Compact context stats, linked activity browser and file/command insights for CodexHost Web.",
   "type": "module",
   "license": "Apache-2.0",
   "author": "ABC-xiaoxuan",
@@ -32,7 +32,8 @@
     "README.md",
     "README_en.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "keywords": [
     "codexhost",
@@ -42,11 +43,16 @@
     "dsh-plugin"
   ],
   "scripts": {
-    "build": "node scripts/build-codexhost.mjs",
+    "build": "npm run build:legacy && npm run build:native",
+    "build:legacy": "node scripts/build-codexhost.mjs",
+    "build:native": "node scripts/build-marketplace.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.codexhost.json",
     "test": "node --test tests/codexhost/*.test.ts",
     "test:browser": "npm run build && node scripts/test-codexhost-browser.mjs",
-    "check": "npm run typecheck && npm test && npm run build && npm run verify:package",
+    "test:market": "node --test tests/market/*.test.mjs",
+    "pack:market": "npm run build:native && npm run verify:market && node scripts/package-marketplace.mjs",
+    "verify:market": "node scripts/verify-marketplace.mjs",
+    "check": "npm run typecheck && npm test && npm run build && npm run verify:package && npm run verify:market",
     "verify:package": "node scripts/verify-codexhost-package.mjs",
     "prepack": "npm run build"
   },
@@ -62,7 +68,8 @@
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-session",
         "@deepseek-ai/dsh-api-session-controller",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }
   },
@@ -75,7 +82,10 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
     "esbuild": "^0.25.12",
+    "fflate": "0.8.2",
+    "marked": "16.4.2",
     "playwright-core": "^1.56.1",
+    "postcss": "8.5.6",
     "prettier": "3.6.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",

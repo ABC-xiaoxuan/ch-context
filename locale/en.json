@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "CH Context",
-    "description": "Read-only context, usage and conversation insights for CodexHost Web.",
+    "description": "Compact context stats, linked activity timeline and browser, file/command records and conversation relationships for CodexHost Web.",
     "detail": "README_en.md"
   }
 }

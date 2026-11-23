@@ -5,6 +5,8 @@ import { en, zh, translator } from './i18n.ts'
 import { recordOf } from './model.ts'
 import { type ClientContext, type ViewProps } from './hooks.ts'
 import styles from './styles.css'
+import inspectorStyles from './inspector.css'
+import surfaceStyles from './legacy-surface.css'
 
 export const name = 'ch-context'
 export const inject = ['slots', 'locale']
@@ -45,7 +47,7 @@ export function apply(ctx: ClientContext): void {
     const tag = document.createElement('style')
     tag.dataset.plugin = name
     tag.dataset.pluginCss = name
-    tag.textContent = styles
+    tag.textContent = styles + '\n' + inspectorStyles + '\n' + surfaceStyles
     document.head.appendChild(tag)
     return () => tag.remove()
   }, 'ch-context: styles')
@@ -85,7 +87,7 @@ export function apply(ctx: ClientContext): void {
         name: 'sidebar.panellist',
         id: name,
         order: 25,
-        label: () => text()('title'),
+        label: () => text()('compatibilityTitle'),
         locale: name,
       },
       (props) => createElement(Icon, { size: typeof props.size === 'number' ? props.size : 20 }),

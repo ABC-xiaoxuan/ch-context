@@ -1,0 +1,6 @@
+[data-conversation-scroll][data-ch-context-surface]
+  > [data-composer-seat]:not(
+    :has([data-approval-key], [data-plan-review-key], [data-question-key], [data-user-question-key])
+  ) {
+  display: none;
+}

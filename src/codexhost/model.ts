@@ -83,6 +83,30 @@ export function usageOf(value: unknown): Usage | null {
   return NUMERIC_FIELDS.some((field) => usage[field] !== undefined) ? usage : null
 }
 
+export interface TokenPart {
+  kind: 'input' | 'uncachedInput' | 'cacheRead' | 'cacheWrite' | 'output'
+  value: number
+}
+
+export function tokenParts(usage: Usage | null): TokenPart[] {
+  const input = finiteNumber(usage?.inputTokens)
+  const output = finiteNumber(usage?.outputTokens)
+  if (input === undefined || output === undefined) return []
+  const read = finiteNumber(usage?.cachedInputTokens)
+  const write = finiteNumber(usage?.cacheWriteInputTokens)
+  if (read === undefined || write === undefined || read + write > input)
+    return [
+      { kind: 'input', value: input },
+      { kind: 'output', value: output },
+    ]
+  return [
+    { kind: 'uncachedInput', value: input - read - write },
+    { kind: 'cacheRead', value: read },
+    { kind: 'cacheWrite', value: write },
+    { kind: 'output', value: output },
+  ]
+}
+
 export function occupancyOf(
   usage: Usage | null,
 ): { used?: number; capacity?: number; percent: number } | null {

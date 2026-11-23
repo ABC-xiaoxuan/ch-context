@@ -5,6 +5,9 @@ import { createRoot } from 'react-dom/client'
 
 const id = '11111111-1111-4111-8111-111111111111'
 const second = '22222222-2222-4222-8222-222222222222'
+const childId = '33333333-3333-4333-8333-333333333333'
+const emptyProjection = { usage: null }
+const openedSessions: string[] = []
 let locale = new URLSearchParams(location.search).get('lang') ?? 'en'
 const localeListeners = new Set<() => void>()
 const currentListeners = new Set<() => void>()
@@ -33,6 +36,8 @@ let usage: Record<string, unknown> = {
 let projection = { usage }
 let eventController: ReadableStreamDefaultController<Uint8Array> | undefined
 let eventCancelled = 0
+let failChildHistory = false
+let failNextHistory = false
 let delayNextUsage = false
 let pendingUsage: ((fail?: boolean) => void) | undefined
 let currentKey: string | undefined = id
@@ -40,6 +45,7 @@ const root = createRoot(document.getElementById('app')!)
 const requests: { path: string; args: unknown }[] = []
 const errors: string[] = []
 const originalFetch = globalThis.fetch
+const realNow = Date.now
 
 const snapshot = {
   getSnapshot: () => ({ key: currentKey }),
@@ -52,9 +58,19 @@ const ctx = {
   get(name: string) {
     return name === 'uiSession'
       ? { adapter: { current: snapshot } }
-      : name === 'layout'
-        ? { selectPanel: () => mount('main') }
-        : undefined
+      : name === 'uiWorkspace'
+        ? {
+            openSession(sessionId: string) {
+              openedSessions.push(sessionId)
+              currentKey = sessionId
+              currentListeners.forEach((listener) => listener())
+              projectionListeners.forEach((listener) => listener())
+              mount('conversation.view')
+            },
+          }
+        : name === 'layout'
+          ? { selectPanel: () => mount('main') }
+          : undefined
   },
   locale: {
     getLocale: () => ({ active: locale }),
@@ -87,6 +103,8 @@ const ctx = {
 function event(seq: number, type: string, data: Record<string, unknown>) {
   return { type: 'event', event: { seq, type, time: 1763810000000 + seq * 1000, data } }
 }
+const richReply =
+  '# Context review\n\nThe panel now connects **statistics**, the activity timeline and readable records.\n\n- Confirmed native context and usage\n- File and command navigation\n- Missing data stays unknown\n\n| Metric | Source |\n| --- | --- |\n| Context | CodexHost snapshot |\n| Activity | Loaded history window |\n\n```ts\nconst contextWindow = 200_000\nconst readOnly = true\n```\n\n![Reference image](https://example.invalid/preview.png)\n'
 const records = [
   event(1, 'user/message', {
     content: [
@@ -94,10 +112,12 @@ const records = [
       { type: 'image', attachment: { id: 'fixture-image' } },
     ],
   }),
-  event(2, 'tool/call', { name: 'read', arguments: '{"path":"src/context.ts"}' }),
+  event(2, 'tool/call', { callId: 'read-a', name: 'read', arguments: '{"path":"src/context.ts"}' }),
   event(3, 'tool/result', {
     meta: { codexhostOutput: [{ reference: { sessionId: id, seq: 3 } }] },
     message: {
+      source: { callId: 'read-a' },
+      isError: false,
       content: [
         {
           type: 'text',
@@ -111,7 +131,7 @@ const records = [
       content: [
         {
           type: 'text',
-          text: 'The Host reports confirmed context and usage facts. Missing composition values remain unknown.',
+          text: richReply,
         },
       ],
     },
@@ -122,8 +142,14 @@ const records = [
   event(6, 'user/message', {
     content: [{ type: 'text', text: 'Show a read-only context panel.' }],
   }),
-  event(7, 'tool/call', { name: 'bash', arguments: '{"command":"npm test"}' }),
-  event(8, 'tool/result', { message: { content: [{ type: 'text', text: '28 tests passed.' }] } }),
+  event(7, 'tool/call', { callId: 'shell-a', name: 'bash', arguments: '{"command":"npm test"}' }),
+  event(8, 'tool/result', {
+    message: {
+      source: { callId: 'shell-a' },
+      isError: false,
+      content: [{ type: 'text', text: ' {"id":9007199254740993,"dup":1,"dup":2} ' }],
+    },
+  }),
   event(9, 'assistant/message', {
     message: {
       content: [
@@ -187,6 +213,16 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
             },
           },
         },
+        {
+          sessionId: childId,
+          parentSessionId: id,
+          origin: 'subagent',
+          cwd: 'C:/workspace/design-system',
+          updatedAt: 1763810100000,
+          projections: {
+            values: { title: 'Research · context data audit', harnessIdentity: { id: 'pi' } },
+          },
+        },
       ],
       nextCursor: null,
     })
@@ -216,11 +252,25 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return Response.json({ result })
   }
-  if (path.endsWith('api/session/projections')) return wrap({ asOfSeq: 10, values: {} })
+  if (path.endsWith('api/session/projections'))
+    return wrap({ asOfSeq: args.sessionId === id ? records.at(-1)!.event.seq : 0, values: {} })
+  if (path.endsWith('api/session/page') && failNextHistory) {
+    failNextHistory = false
+    return Response.json({ error: { message: 'Retry this history window' } }, { status: 503 })
+  }
+  if (path.endsWith('api/session/page') && args.address.sessionId === childId && failChildHistory)
+    return Response.json({ error: { message: 'History unavailable' } }, { status: 503 })
   if (path.endsWith('api/session/page'))
     return wrap({
-      records: args.beforeSeq ? records.slice(0, 5) : records.slice(5),
-      hasMore: !args.beforeSeq,
+      records:
+        args.address.sessionId === id
+          ? records.filter(
+              (record) =>
+                record.event.seq <= args.throughSeq &&
+                (args.beforeSeq ? record.event.seq < args.beforeSeq : record.event.seq > 5),
+            )
+          : [],
+      hasMore: args.address.sessionId === id && !args.beforeSeq,
     })
   throw new Error(`Unexpected fixture request: ${path}`)
 }) as typeof fetch
@@ -231,14 +281,17 @@ function useProjection(): unknown {
       projectionListeners.add(listener)
       return () => projectionListeners.delete(listener)
     },
-    () => projection,
+    () => (currentKey === id ? projection : emptyProjection),
   )
 }
 function mount(kind: 'main' | 'conversation.view') {
   const entry = slots.get(kind)
   if (!entry) throw new Error(`Missing slot ${kind}`)
   root.render(
-    React.createElement(entry.component, kind === 'main' ? {} : { sessionId: id, useProjection }),
+    React.createElement(
+      entry.component,
+      kind === 'main' ? {} : { sessionId: currentKey ?? id, useProjection },
+    ),
   )
 }
 
@@ -289,6 +342,80 @@ Object.assign(window, {
     releaseUsage(fail = false) {
       pendingUsage?.(fail)
     },
+    appendActivity() {
+      if (records.at(-1)!.event.seq > 10) return
+      records.push(
+        event(11, 'tool/call', {
+          callId: 'read-b',
+          name: 'read',
+          arguments: '{"path":"src/context.ts"}',
+        }),
+        event(12, 'tool/result', {
+          message: {
+            source: { callId: 'read-b' },
+            isError: false,
+            content: [
+              { type: 'text', text: 'The context adapter uses authoritative Host snapshots.' },
+            ],
+          },
+        }),
+        event(13, 'assistant/message', {
+          message: { content: [{ type: 'text', text: richReply }] },
+        }),
+      )
+    },
+    failNextHistoryRead() {
+      failNextHistory = true
+    },
+    setChildHistoryFailure(value: boolean) {
+      failChildHistory = value
+    },
+    appendLiveReply() {
+      if (records.at(-1)!.event.seq !== 13) return
+      records.push(
+        event(14, 'assistant/message', {
+          message: {
+            content: [{ type: 'text', text: 'Live incremental update from the observed history.' }],
+          },
+        }),
+        event(15, 'tool/result', {
+          message: {
+            source: { callId: 'unmatched-native-call' },
+            isError: true,
+            content: [{ type: 'text', text: 'Request handled.' }],
+          },
+        }),
+      )
+    },
+    freezeClock(value: boolean) {
+      const captured = realNow()
+      Date.now = value ? () => captured : realNow
+    },
+    appendClockReply() {
+      if (records.at(-1)!.event.seq === 15)
+        records.push(
+          event(16, 'user/message', {
+            content: [{ type: 'text', text: 'Frozen-clock history update.' }],
+          }),
+        )
+    },
+    denseHistory() {
+      records.splice(
+        5,
+        records.length - 5,
+        ...Array.from({ length: 200 }, (_, index) =>
+          event(
+            index + 6,
+            index % 2 ? 'assistant/message' : 'user/message',
+            index % 2
+              ? { message: { content: [{ type: 'text', text: `Dense record ${index + 6}` }] } }
+              : { content: [{ type: 'text', text: `Dense record ${index + 6}` }] },
+          ),
+        ),
+      )
+      publishUsage({ ...usage })
+    },
+    openedSessions,
     setDraft() {
       currentKey = 'draft:pending'
       currentListeners.forEach((listener) => listener())

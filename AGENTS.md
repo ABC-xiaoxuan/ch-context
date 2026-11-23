@@ -1,37 +1,36 @@
 # ch-context
 
-CodexHost context insight plugin, forked from bowenliang123/dsh-context.
+CodexHost context insight extension, forked from bowenliang123/dsh-context.
 
-## Scope
+## Active targets
 
-The active runtime targets CodexHost's Web plugin system. Its entry points live in `src/codexhost/`. The inherited DSH implementation remains as reference and is excluded from the CodexHost package, build and checks. Standard DSH session-runtime services are not available in CodexHost and must not be simulated to satisfy dependency checks.
+- Native market entry: `manifest.json` (`manifestVersion: 2`), `src/market/web.tsx`, prebuilt `web/index.mjs` and shadow-scoped `web/style.css`. Public `WebExtensionApi` only; bundle React and own all DOM/resources. Web-only, no backend.
+- Optional compatibility entry: `src/codexhost/index.tsx`, `lib/client.js`, legacy DSH slots/ModuleLoader. It is not the native marketplace format.
+- Shared UI/data: `src/codexhost/`. Inherited DSH source remains reference plus selected pure presentation imports; do not simulate its backend services.
 
-## Data integrity
+The authoritative native development guide is `.agents/skills/codexhost-add-desktop-extension/SKILL.md` in BytePioneer-AI/codex-host. Follow its Host contracts, public APIs, ZIP packaging and isolated testing. Do not access Host-private React objects or credential files.
 
-- Use CodexHost's authenticated same-origin client channel and authoritative usage snapshots.
-- Keep current context occupancy separate from cumulative billed tokens.
-- Preserve unknown fields as unknown; never replace them with invented zero values.
-- Never claim a complete prompt breakdown or full historical context timeline from partial observations.
-- Scope async results and subscriptions to their Host/session identity; dispose them on unmount.
-- Keep retention bounded and identify observed samples explicitly.
-- Reuse existing shell slots, React, locale and theme services.
+## Data and lifecycle
 
-## Development
+- Use authenticated, same-origin public client-channel reads; no fabricated zero values or prompt composition.
+- Keep current occupancy, billed usage, loaded-window activity and observed samples distinct.
+- Scope every async result to its Host/session and generation. Preserve older cuts until explicit latest/session change.
+- Bound retained data, and dispose requests, readers, observers, storage subscriptions, React roots and owned DOM.
+- Native entry uses an owned Shadow DOM and public API contributions. Never mutate native element styles/classes.
+- Native language preferences are owned extension settings, not Host locale changes.
 
-- English code, tests and developer documentation. UI dictionaries support Chinese and English, with English fallback.
-- No comments in new source or tests; tooling directives are allowed.
-- Source and test files remain below 1000 lines.
-- Use container queries for pane responsiveness. Verify narrow and wide layouts in both themes.
-- Temporary files belong in `.tmp/` and are not committed.
-- `npm ci`, `npm run check`, `npm run build`, `npm pack --ignore-scripts` are the supported workflow.
-- `npm run check` covers the active CodexHost source, focused tests and distributable validation. Inherited DSH tests are reference-only.
-- Before committing, review the full diff and obtain an independent code review; resolve verified findings.
-- Do not publish to npm or tag a release unless requested. CI must not publish under the upstream identity.
+## Development and delivery
 
-## Compatibility
-
-Use `docs/codexhost-compatibility.md` for the supported host surface and limitations. The initial target is CodexHost 0.23.0. Feature-detect services and optional fields. Do not claim Desktop injection support merely because the Web plugin loads.
+- English source/tests/developer docs; UI supports Chinese/English with fallback.
+- No comments in new source/tests except required tooling directives. Each source/test file stays below 1000 lines.
+- Temporary files belong in ignored `.tmp/`. Never publish real conversation captures or test credentials.
+- `npm ci`, `npm run check`, `npm run test:browser`, `npm run test:market`, `npm run pack:market` are the workflow.
+- Track deterministic prebuilt native and compatibility assets; CI checks source/artifact synchronization.
+- Obtain independent code review before commits and resolve verified findings.
+- Marketplace publication requires a curated native ZIP, matching individual image assets and a public stable GitHub Release, then the official registry's repository-URL submission. Do not claim listing until maintainers approve.
+- Never change published ZIP bytes without a manifest version increase. npm publication is separate and not implied.
+- Real native tests use a separate data directory and free port; never stop or replace the user's live Host.
 
 ## Attribution
 
-Retain the Apache-2.0 license and credit the upstream project. `ch-context` is an independent adaptation, not an official CodexHost or DeepSeek product.
+Retain Apache-2.0, upstream history/credit, and bundled React/Marked notices. ch-context is an independent community extension, not an official CodexHost or DeepSeek product.

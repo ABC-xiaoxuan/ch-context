@@ -342,6 +342,7 @@ test('history obtains the real baseline and sends bounded page requests', async 
   assert.ok(calls.every((call) => call.init.signal === abort))
   assert.deepEqual(page.items[0], {
     id: '["session-a",11]',
+    eventType: 'user/message',
     kind: 'user',
     title: 'user',
     text: 'message 11',
@@ -396,6 +397,65 @@ test('history handles actual assistant, tool call, nested tool result and event 
       { kind: 'event', title: 'turn/end', text: '{"turn":1,"reason":{"kind":"completed"}}' },
     ],
   )
+})
+
+test('history retains native tool identity, arguments and explicit error state', async () => {
+  const records = [
+    event(1, 'tool/call', {
+      callId: 'read-a',
+      name: 'functions.read',
+      arguments: '{"path":"a.ts"}',
+    }),
+    event(2, 'tool/result', {
+      message: {
+        source: { callId: 'read-a' },
+        isError: true,
+        content: [{ type: 'text', text: 'failed' }],
+      },
+    }),
+  ]
+  const { items } = await historyFixture(records).client.history('session-a', signal())
+  assert.equal(items[0].eventType, 'tool/call')
+  assert.equal(items[0].callId, 'read-a')
+  assert.equal(items[0].toolName, 'functions.read')
+  assert.equal(items[0].arguments, '{"path":"a.ts"}')
+  assert.equal(items[1].callId, 'read-a')
+  assert.equal(items[1].isError, true)
+  assert.equal(items[0].isError, undefined)
+})
+
+test('session lineage is marked as subagent only when the Host reports it', async () => {
+  const { items } = await fixture(() => ({
+    items: [row('plain'), row('child', { origin: 'subagent' }), row('fork', { origin: 'fork' })],
+    nextCursor: null,
+  })).client.listSessions(null, signal())
+  assert.equal(items[0].origin, undefined)
+  assert.equal(items[1].origin, 'subagent')
+  assert.equal(items[2].origin, undefined)
+})
+
+test('session summaries preserve nullable tree and fork provenance independently of agent origin', async () => {
+  const parent = '11111111-1111-4111-8111-111111111111'
+  const { items } = await fixture(() => ({
+    items: [
+      row('child', {
+        projections: {
+          values: { title: 'Child', threadTreeParent: parent, archiveForkParent: parent },
+        },
+      }),
+      row('plain', {
+        projections: {
+          values: { title: 'Plain', threadTreeParent: null, archiveForkParent: null },
+        },
+      }),
+    ],
+    nextCursor: null,
+  })).client.listSessions(null, signal())
+  assert.equal(items[0].treeParentId, parent)
+  assert.equal(items[0].forkParentId, parent)
+  assert.equal(items[0].origin, undefined)
+  assert.equal(items[1].treeParentId, undefined)
+  assert.equal(items[1].forkParentId, undefined)
 })
 
 test('history flags unavailable image and future blocks while preserving observed text', async () => {

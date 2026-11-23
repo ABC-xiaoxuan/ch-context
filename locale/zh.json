@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "CH Context · 上下文洞察",
-    "description": "查看 CodexHost 的上下文占用、真实用量与会话记录。只读，不修改提示词。",
+    "description": "紧凑统计、时间线与浏览器联动、文件和命令记录，以及 CodexHost 会话关系。",
     "detail": "README.md"
   }
 }

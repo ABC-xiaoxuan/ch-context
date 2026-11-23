@@ -5,6 +5,9 @@ export interface SessionRow {
   cwd?: string
   updatedAt?: number
   parentId?: string
+  origin?: 'subagent'
+  treeParentId?: string
+  forkParentId?: string
 }
 
 export interface SessionPage {
@@ -19,6 +22,11 @@ export interface HistoryItem {
   text: string
   time?: number
   seq: number
+  eventType?: string
+  callId?: string
+  toolName?: string
+  arguments?: string
+  isError?: boolean
   clipped?: boolean
   hostPreview?: boolean
   textTruncated?: boolean
@@ -98,6 +106,8 @@ function sessionRow(value: unknown): SessionRow {
   const cwd = optionalString(row.cwd, 'session cwd')
   const updatedAt = optionalNumber(row.updatedAt, 'session updatedAt')
   const parentId = optionalString(row.parentSessionId, 'parent session id')
+  const treeParentId = optionalString(values.threadTreeParent, 'thread tree parent')
+  const forkParentId = optionalString(values.archiveForkParent, 'fork parent')
   return {
     id: identity(row.sessionId, 'session id'),
     title: optionalString(values.title, 'session title') ?? '',
@@ -105,6 +115,9 @@ function sessionRow(value: unknown): SessionRow {
     ...(cwd === undefined ? {} : { cwd }),
     ...(updatedAt === undefined ? {} : { updatedAt }),
     ...(parentId === undefined ? {} : { parentId }),
+    ...(treeParentId === undefined ? {} : { treeParentId }),
+    ...(forkParentId === undefined ? {} : { forkParentId }),
+    ...(row.origin === 'subagent' ? { origin: 'subagent' as const } : {}),
   }
 }
 
@@ -126,6 +139,12 @@ function historyItem(value: unknown, sessionId: string): HistoryItem {
   let hostPreview = false
   let textTruncated = false
   let contentUnavailable = false
+  let callId: string | undefined
+  let toolName: string | undefined
+  let argumentsText: string | undefined
+  let isError: boolean | undefined
+  const metadataId = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 && value.length <= 512 ? value : undefined
   if (type === 'tool/result' && data.meta != null) {
     const meta = object(data.meta, 'tool result metadata')
     if (meta.codexhostOutput !== undefined) {
@@ -155,6 +174,15 @@ function historyItem(value: unknown, sessionId: string): HistoryItem {
   if (type === 'user/message' || type === 'assistant/message' || type === 'tool/result') {
     kind = type === 'user/message' ? 'user' : type === 'assistant/message' ? 'assistant' : 'tool'
     const message = type === 'user/message' ? data : object(data.message, 'history message')
+    if (type === 'tool/result') {
+      const source =
+        message.source && typeof message.source === 'object' && !Array.isArray(message.source)
+          ? (message.source as ObjectValue)
+          : undefined
+      callId = metadataId(source?.callId)
+      toolName = metadataId(source?.name)
+      if (typeof message.isError === 'boolean') isError = message.isError
+    }
     title = type === 'tool/result' ? 'tool/result' : kind
     if (!Array.isArray(message.content)) {
       throw new Error('Invalid history message: expected content blocks')
@@ -173,7 +201,11 @@ function historyItem(value: unknown, sessionId: string): HistoryItem {
   } else if (type === 'tool/call') {
     kind = 'tool'
     title = identity(data.name, 'tool name')
-    append(string(data.arguments, 'tool arguments'))
+    toolName = title
+    callId = metadataId(data.callId)
+    const rawArguments = string(data.arguments, 'tool arguments')
+    argumentsText = rawArguments.slice(0, MAX_TEXT)
+    append(rawArguments)
   } else {
     append(JSON.stringify(data))
   }
@@ -183,6 +215,11 @@ function historyItem(value: unknown, sessionId: string): HistoryItem {
     title,
     text,
     seq,
+    eventType: type,
+    ...(callId === undefined ? {} : { callId }),
+    ...(toolName === undefined ? {} : { toolName }),
+    ...(argumentsText === undefined ? {} : { arguments: argumentsText }),
+    ...(isError === undefined ? {} : { isError }),
     ...(time === undefined ? {} : { time }),
     ...(clipped ? { clipped: true } : {}),
     ...(hostPreview ? { hostPreview: true } : {}),

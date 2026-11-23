@@ -1,39 +1,42 @@
 # CodexHost compatibility
 
-The first integration targets the CodexHost **Web extension system**. The local installation was updated from 0.23.0 to 0.25.0 during investigation; live API and browser verification use **0.25.0**. The 0.23.0 packaged implementation was inspected, not independently reinstalled for an end-to-end run. Desktop renderer injection, remote-host switching and standard standalone DSH are not declared supported by this release.
+The native marketplace package follows the [official Host extension guide](https://github.com/BytePioneer-AI/codex-host/blob/main/.agents/skills/codexhost-add-desktop-extension/SKILL.md). Its contract is `manifestVersion: 2` with a **Web-only** `web` entry. Live native validation uses installed CodexHost **0.25.0** in a separate data directory and free port; no Desktop execution is claimed.
 
-## Plugin contract
+## Native entry
 
-- `dsh.bundle.patch` inserts a `ch-context` row.
-- `dsh.client.platform` is `web`; the package exposes a local `./client` bundle.
-- There is no root host entry, no runtime dependency on `@deepseek-ai/dsh-session`, and no hard injection of `sessionProjections`.
-- The browser bundle registers through `window.__ModuleLoader__.load` and uses the Host's React modules.
-- Client services are `slots` and `locale`; the global panel optionally observes `uiSession.adapter.current`. Conversation slots provide `sessionId` and the optional `useProjection` hook.
-- Registered surfaces are `main`, `sidebar.panellist`, `conversation.view` and `settings.section`, all under the `ch-context` identity.
+- `manifest.json` declares `web/index.mjs` and `web/style.css`, bilingual metadata, author, categories and raster assets.
+- Standard ESM exports `activate(api)` and registers the main panel/settings through public `WebExtensionApi` contributions.
+- React is bundled into the native entry and renders only owned nodes in an owned Shadow DOM. CSS selectors are shadow-scoped; a public body theme marker is mirrored only onto the owned host.
+- The entry uses `api.assets.url`, `api.storage`, `api.signal`, `api.track`, `api.panels.register` and `api.settings.registerPage`. It does not access Host-private React/Cordis state or credential files.
+- No `desktop`, `page`, `widget` or `backend` is declared. Targets therefore infer to `web` only. Native import/list verification confirms `backendState: none`.
+- The public Web API does not expose current-thread or Host-locale subscriptions. Conversation selection is explicit. Auto language uses document/browser language; the extension-owned selector/settings persist independently of Host preferences.
+- Every render/activation owns and releases its React root, shadow host, stylesheet link, observers, listeners and subscriptions. Disabling the extension removes its navigation and UI.
 
-## Data contract
+## Shared data contract
 
-- Conversation view: read `codexhostUsage` through the injected projection hook. Explicit refresh uses the authenticated Host usage bridge. A changed native projection invalidates in-flight refresh successes and errors, so an older response cannot overwrite accepted native facts.
-- Global view: POST browser-relative `api/ch/v1/rpc` with `codexhost/thread/usage/inspect` and the selected `threadId`. GET `api/ch/v1/events` provides invalidations; the plugin rereads absolute snapshots rather than summing events.
-- Conversation picker: POST `api/session/list`, following opaque page cursors. Search is explicitly limited to the displayed page.
-- History: POST `api/session/projections` to obtain `asOfSeq`, then POST `api/session/page`. Older reads retain the same upper watermark and use the prior page's first sequence as an exclusive boundary.
-- Session ids must identify committed Host Threads. Draft/composer selections do not trigger usage/history requests.
-- All HTTP calls use the browser's same-origin session, and URLs retain a deployment path prefix. No login tokens or private credential files are read by the plugin.
+- All data reads use existing authenticated, same-origin browser-relative URLs, retaining proxy path prefixes.
+- Usage: POST `api/ch/v1/rpc` with `codexhost/thread/usage/inspect`; GET `api/ch/v1/events` supplies invalidations. Absolute snapshots are reread; events are not summed into tokens.
+- Conversation picker: POST `api/session/list`, following opaque cursors. Search is page-scoped.
+- History: obtain `asOfSeq` from `api/session/projections`, then read `api/session/page`. Older reads preserve upper watermark and exclusive `beforeSeq`.
+- Accepted-snapshot sequence drives latest-history refresh, independently of wall-clock precision. Refresh/Retry preserves an older cut; only Latest or changing conversations clears it.
+- Native tool IDs/arguments/error flags and parent/fork/tree metadata are retained. Pairing requires unique ordered call IDs; ambiguous results remain unpaired. Subagent classification requires explicit origin evidence.
+- Raw display/copy never reparses retained strings. Explicit errors are visible even without a matched call. HTML stays text, unsafe URL protocols are blocked and images do not fetch automatically.
+- Current occupancy, billed usage, loaded-window activity and observed context samples have distinct scopes. Percent-only facts keep unknown counts unknown. Fractional credits and tiny costs retain nonzero display precision.
+- Missing cache fields do not become zero; independently confirmed cache facts remain visible when full decomposition is unavailable.
+- No exact prompt-section breakdown, historical per-request token curves, execution-phase durations or complete Fleet aggregate is inferred from this contract.
 
-The installed 0.23.0 build synthesized all-zero `tokenUsage` buckets when telemetry was incomplete. Therefore availability is determined from optional fields in `codexhostUsage.usage`, never the mere presence of `tokenUsage`.
+## Bounds
 
-The common Host interface does not expose exact prompt bodies or a reliable system/tools/messages token composition. Native occupancy percentages take precedence over derived ratios; percentage-only snapshots do not synthesize token counts. Fractional credits and small costs retain nonzero display precision. There are no synthetic DSH events or fake projection services to fill those gaps. Historical Web events must not be labeled as exact request contents.
+One displayed conversation page and history page are retained. History displays at most 200 events/8,000 characters each, with affected records marked. File/command counts describe observed attempts and exact supplied paths in that window. Context observations retain at most 120 changed samples for the selected conversation. Thread/generation changes abort stale HTTP work, event readers reconnect with bounded backoff, and unmount aborts all retained work.
 
-## Bounds and lifecycle
+## Optional compatibility entry
 
-- Only the displayed conversation-list page and one history page are kept by the panel.
-- Each history response displays at most 200 events and 8,000 text characters per event; unavailable/clipped content is explicitly described.
-- At most 120 changed context observations are retained in memory for the selected conversation.
-- Old HTTP requests and NDJSON readers are aborted on selection changes/unmount. Failed event feeds reconnect with bounded backoff; no timer scans every conversation.
-- A failed usage refresh retains previously confirmed facts and shows the error. Switching sessions never displays the previous session's facts as the new session's data.
+`lib/client.js` and `cordis.patch.yml` are a separate legacy DSH-compatible Web installation. It uses Host React/slots and provides the conversation tab plus a compatibility-labeled sidebar item. It is not the native market package. Only that optional embedded surface marks its owning conversation scroller to hide the ordinary composer; approval/review/question seats stay visible, and the mark is removed on cleanup.
 
-## Verification
+Inherited standard-DSH sources/tests remain reference and selected pure display imports; they do not establish native Host extension compatibility.
 
-`npm run check` covers source type checking, protocol/mapping/cancellation/pagination tests, the browser build and client-only package validation. Live smoke checks separately exercise the installed plugin and authenticated CodexHost. Browser evidence and logs stay in ignored `.tmp/` because real conversation titles and content are private.
+## Verification and distribution
 
-The upstream standard-DSH compatibility matrix and test suite remain historical reference; they do not establish ch-context support for those hosts.
+`npm run check` runs strict type checking, focused tests, both builds and native/compatibility validation. Browser fixtures exercise linked inspection, data boundaries, safe rich text, native entry lifecycle and shadow isolation. Real native ZIP import/enable/UI/disable was tested with a separate data directory; the user's live Web PID stayed unchanged, and the test Web/Host were stopped and data removed.
+
+The curated native ZIP has no source tests, development executables or compatibility bootstrap. Registry parsing, ZIP reading, script static patterns, raster signatures and size limits are checked before stable Release publication. Matching image assets accompany the ZIP. Market listing remains pending until maintainers approve the repository submission.
