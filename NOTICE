@@ -1,0 +1,14 @@
+ch-context
+
+An independent CodexHost Web adaptation of dsh-context.
+
+This project includes source and presentation primitives from:
+https://github.com/bowenliang123/dsh-context
+Author: bowenliang123 and upstream contributors
+License: Apache License, Version 2.0
+
+CodexHost integration, data source and related changes:
+Copyright 2026 ABC-xiaoxuan and ch-context contributors
+
+The original source history and LICENSE are retained. This notice does not
+imply endorsement by the upstream author, CodexHost or DeepSeek.
