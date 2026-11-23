@@ -27,8 +27,9 @@ First marketplace registration requires the catalog maintainers' review. A publi
 
 ## Features
 
-- Compact conversation statistics and the upstream-style split inspection layout.
-- Linked activity timeline and context browser: pointer/keyboard scrubbing, categories, sequence mode, current-window search and previous/next navigation.
+- All-conversations Overview gallery with workspace filters, sorting and on-demand mini occupancy rings, alongside the Apple Neutral split inspection workbench.
+- Top telemetry cockpit featuring context occupancy with threshold markers and integrated live observation sparkline, cumulative token donut with reasoning output chip, and speed/cache efficiency with quick activity pulse pills.
+- Turn-banded linked activity timeline and context browser: paired call/result bridges, error pins, pointer/keyboard scrubbing, categories, sequence mode, current-window search, errors-only filter and previous/next navigation.
 - Markdown messages, tables, code blocks, raw-text view and copying. Raw mode preserves retained text verbatim; HTML stays escaped and remote images remain explicit links.
 - Host context occupancy and window capacity, separate from cumulative billed usage.
 - Native token/cache usage, cost, cache-hit rates, output speed and first-output latency when available. Partial cache telemetry stays independently visible; unknown values are not replaced with zeros.
@@ -51,7 +52,7 @@ npm run pack:market
 
 `npm run check` performs strict type checking, focused Node tests, both builds, and native/compatibility package validation. Browser commands require installed Chrome/Edge/Chromium; set `CH_CONTEXT_CHROME_PATH` when needed. Synthetic fixtures exercise UI and lifecycle without model turns or real conversation data.
 
-`npm run pack:market` creates `dist/ch-context-0.2.0.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
+`npm run pack:market` creates `dist/ch-context-0.3.2.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
 
 Tracked prebuilt files `web/index.mjs`, `web/style.css` and `lib/client.js` must be rebuilt with source changes. CI rejects stale artifacts. Never change published ZIP bytes without increasing the manifest version.
 

@@ -149,6 +149,29 @@ function pairedResults(items: readonly HistoryItem[]): Map<HistoryItem, HistoryI
   return pairs
 }
 
+export function pairedRecordIds(items: readonly HistoryItem[]): Map<string, string> {
+  const pairs = pairedResults(items)
+  const links = new Map<string, string>()
+  for (const [call, result] of pairs) {
+    links.set(call.id, result.id)
+    links.set(result.id, call.id)
+  }
+  return links
+}
+
+export function commandProgram(command: string): string {
+  const trimmed = command.trim()
+  if (!trimmed) return 'shell'
+  const tokens = trimmed.split(/\s+/)
+  for (const token of tokens) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue
+    const cleaned = token.replace(/^['"]|['"]$/g, '')
+    const base = cleaned.split(/[\\/]/).at(-1) ?? cleaned
+    if (base) return base.slice(0, 28)
+  }
+  return 'shell'
+}
+
 function errorOf(call: HistoryItem, result: HistoryItem | undefined): boolean | undefined {
   if (call.isError === true || result?.isError === true) return true
   if (result?.isError === false || call.isError === false) return false

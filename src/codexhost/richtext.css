@@ -1,0 +1,114 @@
+.ch-rich-text {
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+  color: var(--ch-ink-2);
+}
+.ch-rich-text > :first-child {
+  margin-top: 0;
+}
+.ch-rich-text p {
+  margin: 0 0 9px;
+}
+.ch-rich-text :is(h2, h3, h4, h5, h6) {
+  margin: 12px 0 6px;
+  line-height: 1.35;
+  font-weight: 650;
+  color: var(--ch-ink);
+}
+.ch-rich-text h2 {
+  font-size: 15px;
+}
+.ch-rich-text h3 {
+  font-size: 13.5px;
+}
+.ch-rich-text h4,
+.ch-rich-text h5,
+.ch-rich-text h6 {
+  font-size: 12px;
+}
+.ch-rich-text :is(ul, ol) {
+  margin: 6px 0 9px;
+  padding-left: 20px;
+}
+.ch-rich-text li > p {
+  margin: 0;
+}
+.ch-rich-text blockquote {
+  border-left: 3px solid var(--ch-border-strong);
+  padding: 2px 10px;
+  margin: 9px 0;
+  color: var(--ch-muted);
+}
+.ch-rich-text :not(pre) > code {
+  font-size: 11px;
+  font-family: var(--ch-mono);
+  background: var(--ch-well);
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--ch-ink);
+}
+.ch-rich-text a {
+  color: var(--ch-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.ch-rich-text hr {
+  border: 0;
+  border-top: 1px solid var(--ch-border);
+  margin: 10px 0;
+}
+.ch-code-block {
+  border: 1px solid var(--ch-border);
+  border-radius: 7px;
+  overflow: hidden;
+  margin: 8px 0;
+  background: var(--ch-code-bg);
+}
+.ch-code-block > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--ch-border);
+  padding: 3px 9px;
+  font-family: var(--ch-mono);
+  font-size: 10px;
+  color: var(--ch-muted);
+}
+.ch-code-block pre {
+  font-family: var(--ch-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 9px 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ch-ink);
+}
+.ch-rich-table {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 8px 0;
+}
+.ch-rich-table table {
+  border-collapse: collapse;
+  font-size: 11px;
+  width: 100%;
+}
+.ch-rich-table :is(th, td) {
+  border: 1px solid var(--ch-border);
+  padding: 5px 8px;
+  text-align: left;
+  min-width: 70px;
+}
+.ch-rich-table th {
+  background: var(--ch-well);
+  font-weight: 600;
+  color: var(--ch-ink);
+}
+.ch-task-state {
+  font-size: 12px;
+  color: var(--ch-accent);
+}

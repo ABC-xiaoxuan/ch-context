@@ -1,6 +1,6 @@
 {
   "name": "ch-context",
-  "version": "0.2.0",
+  "version": "0.3.2",
   "description": "Compact context stats, linked activity browser and file/command insights for CodexHost Web.",
   "type": "module",
   "license": "Apache-2.0",

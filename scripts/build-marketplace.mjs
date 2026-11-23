@@ -22,10 +22,16 @@ await build({
   minify: true,
   legalComments: 'none',
 })
-const source =
-  (await readFile('src/codexhost/styles.css', 'utf8')) +
-  '\n' +
-  (await readFile('src/codexhost/inspector.css', 'utf8'))
+const source = (
+  await Promise.all([
+    readFile('src/codexhost/styles.css', 'utf8'),
+    readFile('src/codexhost/telemetry.css', 'utf8'),
+    readFile('src/codexhost/inspector.css', 'utf8'),
+    readFile('src/codexhost/richtext.css', 'utf8'),
+  ])
+)
+  .map((part) => part.replace(/\r\n/g, '\n'))
+  .join('\n')
 const tree = postcss.parse(source)
 tree.walkRules((rule) => {
   for (let parent = rule.parent; parent; parent = parent.parent)

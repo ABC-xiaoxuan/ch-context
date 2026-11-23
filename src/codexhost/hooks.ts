@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { CodexHostClient, type HistoryPage, type SessionPage } from './api.ts'
-import { appendSample, recordOf, usageOf, type Sample, type Usage } from './model.ts'
+import { CodexHostClient, type HistoryPage, type SessionPage, type SessionRow } from './api.ts'
+import { appendSample, isThreadId, recordOf, usageOf, type Sample, type Usage } from './model.ts'
 import { observeUsageChanges } from './realtime.ts'
 
 export interface Observable<T> {
@@ -340,4 +340,55 @@ export function useHistory(
         })
     },
   }
+}
+
+const EMPTY_USAGE_MAP: ReadonlyMap<string, Usage | null> = new Map()
+
+export function useOverviewUsage(
+  rows: readonly SessionRow[],
+  enabled: boolean,
+  revision: number,
+): ReadonlyMap<string, Usage | null> {
+  const [state, setState] = useState<{
+    key: string
+    entries: Map<string, Usage | null>
+  }>(() => ({ key: '', entries: new Map() }))
+  const ids = rows
+    .map((row) => row.id)
+    .filter(isThreadId)
+    .slice(0, 50)
+  const key = enabled && ids.length > 0 ? `${revision}:${ids.join(',')}` : ''
+  useEffect(() => {
+    if (!key) {
+      setState({ key: '', entries: new Map() })
+      return
+    }
+    const controller = new AbortController()
+    setState({ key, entries: new Map() })
+    const queue = [...ids]
+    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (!controller.signal.aborted && queue.length > 0) {
+        const id = queue.shift()
+        if (!id) break
+        let nextUsage: Usage | null = null
+        try {
+          const snapshot = await client.inspectUsage(id, controller.signal)
+          if (controller.signal.aborted) return
+          nextUsage = usageOf(snapshot)
+        } catch {
+          if (controller.signal.aborted) return
+          nextUsage = null
+        }
+        setState((previous) => {
+          if (controller.signal.aborted || previous.key !== key) return previous
+          const next = new Map(previous.entries)
+          next.set(id, nextUsage)
+          return { key, entries: next }
+        })
+      }
+    })
+    void Promise.all(workers)
+    return () => controller.abort()
+  }, [key])
+  return key && state.key === key ? state.entries : EMPTY_USAGE_MAP
 }

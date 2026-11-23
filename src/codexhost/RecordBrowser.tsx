@@ -18,10 +18,14 @@ function labelOf(item: HistoryItem, tool: string | undefined, t: Translate): str
 function RecordDetail({
   item,
   title,
+  pairedItem,
+  onFocus,
   t,
 }: {
   item: HistoryItem
   title: string
+  pairedItem?: HistoryItem
+  onFocus: (id: string) => void
   t: Translate
 }): ReactElement {
   const [rich, setRich] = useState(item.kind === 'user' || item.kind === 'assistant')
@@ -30,28 +34,47 @@ function RecordDetail({
   return (
     <section className="ch-record-detail" aria-label={t('recordDetails')}>
       <header>
-        <div>
-          <span className="ch-record-kind" style={{ color: ROLE_COLOR[item.kind] }}>
+        <div className="ch-detail-title-row">
+          <span
+            className={`ch-record-kind ch-dot-pill ${item.isError === true ? 'is-err' : ''}`}
+          >
+            <i
+              style={{
+                background: item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[item.kind],
+              }}
+            />
             {t(item.kind)}
           </span>
           <strong title={title}>{title}</strong>
           <RecordBadges item={item} t={t} />
         </div>
         <div className="ch-detail-controls">
-          <button
-            className={`ch-mini-button ${rich ? 'is-active' : ''}`}
-            aria-pressed={rich}
-            onClick={() => setRich(true)}
-          >
-            {t('renderedText')}
-          </button>
-          <button
-            className={`ch-mini-button ${!rich ? 'is-active' : ''}`}
-            aria-pressed={!rich}
-            onClick={() => setRich(false)}
-          >
-            {t('sourceText')}
-          </button>
+          {pairedItem && (
+            <button
+              className="ch-mini-button ch-pair-jump"
+              onClick={() => onFocus(pairedItem.id)}
+            >
+              {pairedItem.eventType === 'tool/result'
+                ? `${t('jumpResult')} ↗`
+                : `${t('jumpCall')} ↖`}
+            </button>
+          )}
+          <div className="ch-seg" role="group">
+            <button
+              className={rich ? 'is-active' : ''}
+              aria-pressed={rich}
+              onClick={() => setRich(true)}
+            >
+              {t('renderedText')}
+            </button>
+            <button
+              className={!rich ? 'is-active' : ''}
+              aria-pressed={!rich}
+              onClick={() => setRich(false)}
+            >
+              {t('sourceText')}
+            </button>
+          </div>
           <button
             className="ch-mini-button"
             onClick={() => {
@@ -70,6 +93,7 @@ function RecordDetail({
         <span title={t('recordTime')}>
           {item.time === undefined ? t('unavailable') : fmtTime(item.time)}
         </span>
+        {item.eventType && <span>{item.eventType}</span>}
         {item.callId && <span title={item.callId}>Call ID · {item.callId}</span>}
       </div>
       <RecordNotices item={item} t={t} />
@@ -90,14 +114,18 @@ function RecordDetail({
 
 export function RecordBrowser({
   items,
+  pairs,
   available,
   toolByRecord,
   focus,
   onFocus,
+  onJumpRecord,
   filter,
   onFilter,
   query,
   onQuery,
+  errorsOnly,
+  onErrorsOnly,
   loading,
   error,
   hasMore,
@@ -108,14 +136,18 @@ export function RecordBrowser({
   t,
 }: {
   items: readonly HistoryItem[]
+  pairs: ReadonlyMap<string, string>
   available: boolean
   toolByRecord: ReadonlyMap<string, string>
   focus?: string
   onFocus: (id: string) => void
+  onJumpRecord: (id: string) => void
   filter: RecordFilter
   onFilter: (filter: RecordFilter) => void
   query: string
   onQuery: (query: string) => void
+  errorsOnly: boolean
+  onErrorsOnly: (value: boolean) => void
   loading: boolean
   error: string | null
   hasMore: boolean
@@ -130,22 +162,37 @@ export function RecordBrowser({
   const [expanded, setExpanded] = useState<Set<HistoryItem['kind']>>(
     () => new Set(['user', 'assistant']),
   )
+  const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
+  const errorCount = useMemo(() => items.filter((item) => item.isError === true).length, [items])
+  const counts = useMemo(() => {
+    let messages = 0
+    let tool = 0
+    let event = 0
+    for (const item of items) {
+      if (item.kind === 'user' || item.kind === 'assistant') messages += 1
+      else if (item.kind === 'tool') tool += 1
+      else event += 1
+    }
+    return { all: items.length, messages, tool, event }
+  }, [items])
   const rows = useMemo(() => {
     const needle = deferred.trim().toLocaleLowerCase()
     return items.filter((item) => {
+      if (errorsOnly && item.isError !== true) return false
       if (
         filter === 'messages'
           ? item.kind !== 'user' && item.kind !== 'assistant'
           : filter !== 'all' && item.kind !== filter
       )
         return false
+      if (!needle) return true
       if (needle.startsWith('tool:'))
         return toolByRecord.get(item.id)?.toLocaleLowerCase() === needle.slice(5)
       return `${labelOf(item, toolByRecord.get(item.id), t)} ${item.text}`
         .toLocaleLowerCase()
         .includes(needle)
     })
-  }, [items, filter, deferred, toolByRecord, t])
+  }, [items, filter, deferred, errorsOnly, toolByRecord, t])
   const selected =
     rows.find((item) => item.id === focus) ??
     rows.findLast((item) => item.kind === 'assistant' || item.kind === 'user') ??
@@ -162,28 +209,43 @@ export function RecordBrowser({
     [items],
   )
   const selectedIndex = rows.findIndex((item) => item.id === selected?.id)
-  const renderRow = (item: HistoryItem): ReactElement => (
-    <button
-      key={item.id}
-      className={`ch-record-item ch-record-${item.kind} ${selected?.id === item.id ? 'is-selected' : ''}`}
-      aria-pressed={selected?.id === item.id}
-      title={labelOf(item, toolByRecord.get(item.id), t)}
-      onClick={() => onFocus(item.id)}
-    >
-      <span className="ch-record-seq" title={`Seq ${item.seq}`}>
-        #{positions.get(item.id)}
-      </span>
-      <span className="ch-record-title">{labelOf(item, toolByRecord.get(item.id), t)}</span>
-      <RecordBadges item={item} t={t} />
-      <span className="ch-record-time">{item.time === undefined ? '' : fmtTime(item.time)}</span>
-    </button>
-  )
+  const renderRow = (item: HistoryItem): ReactElement => {
+    const tool = toolByRecord.get(item.id)
+    const badgeText = item.toolName ?? tool ?? t(item.kind)
+    return (
+      <button
+        key={item.id}
+        className={`ch-record-item ch-record-${item.kind} ${selected?.id === item.id ? 'is-selected' : ''} ${item.isError === true ? 'is-error-row' : ''}`}
+        aria-pressed={selected?.id === item.id}
+        title={labelOf(item, tool, t)}
+        onClick={() => onFocus(item.id)}
+      >
+        <span className="ch-record-seq" title={`Seq ${item.seq}`}>
+          #{positions.get(item.id)}
+        </span>
+        <span className={`ch-dot-pill ch-row-role ${item.isError === true ? 'is-err' : ''}`}>
+          <i
+            style={{
+              background: item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[item.kind],
+            }}
+          />
+          {badgeText}
+        </span>
+        <span className="ch-record-title">{labelOf(item, tool, t)}</span>
+        <RecordBadges item={item} t={t} />
+        <span className="ch-record-time">
+          {item.time === undefined ? '' : fmtTime(item.time)}
+        </span>
+      </button>
+    )
+  }
   const groupLabels = {
     user: 'userMessages',
     assistant: 'assistantMessages',
     tool: 'tools',
     event: 'events',
   } as const
+  const pairedForSelected = selected ? itemById.get(pairs.get(selected.id) ?? '') : undefined
   return (
     <Card
       title={t('browserTitle')}
@@ -196,26 +258,52 @@ export function RecordBrowser({
     >
       <div className="ch-browser-toolbar">
         <div className="ch-filter" role="group" aria-label={t('history')}>
-          {(['all', 'messages', 'tool', 'event'] as const).map((key) => (
-            <button
-              key={key}
-              className={filter === key ? 'is-active' : ''}
-              aria-pressed={filter === key}
-              onClick={() => onFilter(key)}
-            >
-              {t(key === 'tool' ? 'tools' : key === 'event' ? 'events' : key)}
-            </button>
-          ))}
+          {(['all', 'messages', 'tool', 'event'] as const).map((key) => {
+            const label = t(key === 'tool' ? 'tools' : key === 'event' ? 'events' : key)
+            return (
+              <button
+                key={key}
+                className={filter === key ? 'is-active' : ''}
+                aria-label={label}
+                aria-pressed={filter === key}
+                onClick={() => onFilter(key)}
+              >
+                {label}
+                <span className="ch-filter-count">{available ? counts[key] : '—'}</span>
+              </button>
+            )
+          })}
         </div>
-        <button
-          className="ch-mini-button"
-          aria-pressed={grouped}
-          onClick={() => setGrouped((value) => !value)}
-        >
-          {t(grouped ? 'categories' : 'chronological')}
-        </button>
+        <div className="ch-seg" role="group">
+          <button
+            className={grouped ? 'is-active' : ''}
+            aria-pressed={grouped}
+            onClick={() => setGrouped(true)}
+          >
+            {t('categories')}
+          </button>
+          <button
+            className={!grouped ? 'is-active' : ''}
+            aria-pressed={!grouped}
+            onClick={() => setGrouped(false)}
+          >
+            {t('chronological')}
+          </button>
+        </div>
       </div>
       <div className="ch-browser-search">
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="8" />
+          <path d="m21 21-4.3-4.3" />
+        </svg>
         <input
           value={query}
           onChange={(event) => onQuery(event.target.value)}
@@ -225,6 +313,15 @@ export function RecordBrowser({
         {query && (
           <button className="ch-mini-button" onClick={() => onQuery('')} aria-label={t('all')}>
             ×
+          </button>
+        )}
+        {(errorCount > 0 || errorsOnly) && (
+          <button
+            className={`ch-chip ch-err-toggle ${errorsOnly ? 'is-active' : ''}`}
+            aria-pressed={errorsOnly}
+            onClick={() => onErrorsOnly(!errorsOnly)}
+          >
+            {t('errorsOnly')}
           </button>
         )}
         <span>
@@ -246,7 +343,7 @@ export function RecordBrowser({
           <p className="ch-note">{t('historyLoading')}</p>
         ) : rows.length === 0 ? (
           <p className="ch-note">
-            {t(!available ? 'unavailable' : query ? 'noMatches' : 'noHistory')}
+            {t(!available ? 'unavailable' : query || errorsOnly ? 'noMatches' : 'noHistory')}
           </p>
         ) : grouped ? (
           (['user', 'assistant', 'tool', 'event'] as const).map((kind) => {
@@ -271,10 +368,9 @@ export function RecordBrowser({
                     })
                   }
                 >
-                  <span aria-hidden="true">{expanded.has(kind) ? '⌄' : '›'}</span>
-                  <i style={{ background: ROLE_COLOR[kind] }} />
+                  <span aria-hidden="true">{expanded.has(kind) ? '▾' : '▸'}</span>
                   <b>{t(groupLabels[kind])}</b>
-                  <span>{group.length}</span>
+                  <span className="ch-tab-count">{group.length}</span>
                 </button>
                 {expanded.has(kind) && group.map(renderRow)}
               </section>
@@ -312,6 +408,8 @@ export function RecordBrowser({
           key={selected.id}
           item={selected}
           title={labelOf(selected, toolByRecord.get(selected.id), t)}
+          pairedItem={pairedForSelected}
+          onFocus={onJumpRecord}
           t={t}
         />
       )}
