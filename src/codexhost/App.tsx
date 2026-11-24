@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { summarizeActivity } from './activity.ts'
 import { Icon } from './components.tsx'
 import { Inspector } from './Inspector.tsx'
 import { Overview } from './Overview.tsx'
@@ -13,6 +14,13 @@ import {
 } from './hooks.ts'
 import { isThreadId, recordOf } from './model.ts'
 import { translator } from './i18n.ts'
+import { relatedSessions } from './relationships.ts'
+import {
+  buildDiagnosticJson,
+  buildDiagnosticMarkdown,
+  downloadTextFile,
+  safeFileSlug,
+} from './report.ts'
 import { useConversationSurface } from './conversation-surface.ts'
 
 export interface AppProps {
@@ -37,6 +45,7 @@ export function App({
   const current = useCurrentSession(ctx)
   const [picked, setPicked] = useState<string | undefined>()
   const [chooserOpen, setChooserOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [mode, setMode] = useState<'overview' | 'inspector'>('inspector')
   const candidate = sessionId ?? picked ?? current
   const selected = isThreadId(candidate) ? candidate : undefined
@@ -46,6 +55,9 @@ export function App({
   const [pageIndex, setPageIndex] = useState(0)
   const [query, setQuery] = useState('')
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const [exportStatus, setExportStatus] = useState<'idle' | 'copied' | 'downloaded' | 'failed'>(
+    'idle',
+  )
   const list = useSessions(cursors[pageIndex] ?? null, revision)
   const overviewUsage = useOverviewUsage(
     list.page?.items ?? [],
@@ -64,6 +76,8 @@ export function App({
   )
   useEffect(() => {
     setCopied('idle')
+    setExportStatus('idle')
+    setExportOpen(false)
   }, [selected])
   const refresh = (): void => setRevision((value) => value + 1)
   const select = (id: string): void => {
@@ -93,6 +107,46 @@ export function App({
   const workspaceName = row?.cwd?.split(/[\\/]/).filter(Boolean).at(-1)
   const currentTitle = row?.title || selected || t('noSession')
   const currentHarness = row?.harness ?? 'CodexHost'
+  const buildReportInput = () => {
+    const items = history.page?.items ?? []
+    return {
+      threadId: selected ?? '',
+      title: currentTitle,
+      harness: currentHarness,
+      cwd: row?.cwd,
+      exportedAt: Date.now(),
+      usage: usage.usage,
+      summary: history.page ? summarizeActivity(items) : null,
+      items,
+      related: selected ? relatedSessions(list.page?.items ?? [], selected) : [],
+    }
+  }
+  const copyReportMarkdown = async (): Promise<void> => {
+    if (!selected) return
+    try {
+      await navigator.clipboard.writeText(buildDiagnosticMarkdown(buildReportInput(), locale))
+      setExportStatus('copied')
+      setExportOpen(false)
+    } catch {
+      setExportStatus('failed')
+    }
+  }
+  const downloadReport = (format: 'md' | 'json'): void => {
+    if (!selected) return
+    const input = buildReportInput()
+    const slug = safeFileSlug(currentTitle, selected)
+    const content =
+      format === 'md'
+        ? buildDiagnosticMarkdown(input, locale)
+        : JSON.stringify(buildDiagnosticJson(input), null, 2)
+    const ok = downloadTextFile(
+      `ch-context-${slug}.${format}`,
+      content,
+      format === 'md' ? 'text/markdown;charset=utf-8' : 'application/json;charset=utf-8',
+    )
+    setExportStatus(ok ? 'downloaded' : 'failed')
+    setExportOpen(false)
+  }
   return (
     <div
       ref={surface}
@@ -126,6 +180,7 @@ export function App({
                 <span className="ch-divider-v" aria-hidden="true" />
                 <div className="ch-seg ch-view-seg" role="tablist" aria-label={t('title')}>
                   <button
+                    type="button"
                     role="tab"
                     aria-selected={activeView === 'overview'}
                     className={activeView === 'overview' ? 'is-active' : ''}
@@ -137,6 +192,7 @@ export function App({
                     {t('overview')}
                   </button>
                   <button
+                    type="button"
                     role="tab"
                     aria-selected={activeView === 'inspector'}
                     className={activeView === 'inspector' ? 'is-active' : ''}
@@ -170,6 +226,7 @@ export function App({
                       </label>
                       {isThreadId(current) && (
                         <button
+                          type="button"
                           className="ch-mini-button"
                           onClick={() => {
                             setPicked(undefined)
@@ -185,7 +242,7 @@ export function App({
                       <div className="ch-error" role="alert">
                         {t('listError')}
                         <span>{list.error}</span>
-                        <button className="ch-mini-button" onClick={refresh}>
+                        <button type="button" className="ch-mini-button" onClick={refresh}>
                           {t('retry')}
                         </button>
                       </div>
@@ -203,6 +260,7 @@ export function App({
                             filtered.map((item) => (
                               <div key={item.id} role="listitem">
                                 <button
+                                  type="button"
                                   className={`ch-session ${selected === item.id ? 'is-selected' : ''}`}
                                   aria-pressed={selected === item.id}
                                   title={item.title}
@@ -228,6 +286,7 @@ export function App({
                           <small>{t('loadedSearch')}</small>
                           <div>
                             <button
+                              type="button"
                               className="ch-mini-button"
                               disabled={pageIndex === 0 || list.loading}
                               onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
@@ -238,6 +297,7 @@ export function App({
                               {t('page')} {pageIndex + 1}
                             </span>
                             <button
+                              type="button"
                               className="ch-mini-button"
                               disabled={!list.page?.nextCursor || list.loading}
                               onClick={() => {
@@ -268,6 +328,7 @@ export function App({
             )}
             {selected && activeView === 'inspector' && (
               <button
+                type="button"
                 className="ch-mini-button"
                 disabled={!usage.usage}
                 onClick={() => {
@@ -277,7 +338,53 @@ export function App({
                 {t(copied === 'done' ? 'copied' : copied === 'failed' ? 'copyFailed' : 'copy')}
               </button>
             )}
+            {selected && activeView === 'inspector' && (
+              <details
+                className="ch-export-menu"
+                open={exportOpen}
+                onToggle={(event) => setExportOpen(event.currentTarget.open)}
+              >
+                <summary className="ch-button">
+                  {t(
+                    exportStatus === 'copied'
+                      ? 'reportCopied'
+                      : exportStatus === 'downloaded'
+                        ? 'reportDownloaded'
+                        : exportStatus === 'failed'
+                          ? 'copyFailed'
+                          : 'exportReport',
+                  )}{' '}
+                  ▾
+                </summary>
+                <div className="ch-export-pop" role="menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      void copyReportMarkdown()
+                    }}
+                  >
+                    {t('copyMarkdown')}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => downloadReport('md')}
+                  >
+                    {t('downloadMarkdown')}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => downloadReport('json')}
+                  >
+                    {t('downloadJson')}
+                  </button>
+                </div>
+              </details>
+            )}
             <button
+              type="button"
               className="ch-button"
               disabled={activeView === 'overview' ? list.loading : usage.loading}
               onClick={refresh}
@@ -320,7 +427,7 @@ export function App({
               <div className="ch-error" role="alert">
                 {t('usageError')}
                 <span>{usage.error}</span>
-                <button className="ch-mini-button" onClick={refresh}>
+                <button type="button" className="ch-mini-button" onClick={refresh}>
                   {t('retry')}
                 </button>
               </div>

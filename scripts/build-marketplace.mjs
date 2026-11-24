@@ -26,7 +26,9 @@ const source = (
   await Promise.all([
     readFile('src/codexhost/styles.css', 'utf8'),
     readFile('src/codexhost/telemetry.css', 'utf8'),
+    readFile('src/codexhost/overview.css', 'utf8'),
     readFile('src/codexhost/inspector.css', 'utf8'),
+    readFile('src/codexhost/activity.css', 'utf8'),
     readFile('src/codexhost/richtext.css', 'utf8'),
   ])
 )

@@ -1,12 +1,12 @@
-import { Fragment, useMemo, useState, type MouseEvent, type ReactElement } from 'react'
-import { fmtTime } from '../client/format.ts'
-import { commandProgram, type ActivitySummary } from './activity.ts'
+import { useMemo, useState, type MouseEvent, type ReactElement } from 'react'
+import { fmt, fmtTime } from '../client/format.ts'
 import type { HistoryItem } from './api.ts'
 import type { RelatedSession } from './relationships.ts'
 import type { Translate } from './i18n.ts'
 import { Card } from './components.tsx'
 import { previewLine } from './format.ts'
 import { eventIndexAt, eventX } from './event-geometry.ts'
+import { occupancyOf, type Usage } from './model.ts'
 
 export const ROLE_COLOR = {
   user: 'var(--ch-green)',
@@ -14,8 +14,6 @@ export const ROLE_COLOR = {
   tool: 'var(--ch-teal)',
   event: 'var(--ch-purple)',
 }
-
-export type SignalTab = 'files' | 'commands' | 'family'
 
 interface TurnSpan {
   turn: number
@@ -100,15 +98,31 @@ export function ActivityTimeline({
   }, [items, pairs, indexById])
   const previewPairId = preview ? pairs.get(preview.id) : undefined
   const previewPair = previewPairId ? items[indexById.get(previewPairId) ?? -1] : undefined
+  const activeTurn = turnByIndex[previewIndex] ?? 1
+  const activeTurnSpan = turns.find((span) => span.turn === activeTurn)
+  const turnUserRecord = useMemo(() => {
+    if (!activeTurnSpan) return undefined
+    for (let idx = activeTurnSpan.start; idx <= activeTurnSpan.end; idx++) {
+      if (items[idx]?.kind === 'user') return items[idx]
+    }
+    return undefined
+  }, [activeTurnSpan, items])
+  const turnReplyRecord = useMemo(() => {
+    if (!activeTurnSpan) return undefined
+    for (let idx = activeTurnSpan.end; idx >= activeTurnSpan.start; idx--) {
+      if (items[idx]?.kind === 'assistant') return items[idx]
+    }
+    return undefined
+  }, [activeTurnSpan, items])
   const sliderPercent = items.length > 1 ? (effective / (items.length - 1)) * 100 : 100
   return (
     <Card
       title={t('activityTimeline')}
       className="ch-activity-timeline"
       aside={
-        <span className="ch-scope">
-          {t('historyWindow')} · {items.length ? `${items.length}` : '—'}
-          {turns.length > 0 ? ` (${turns.length} ${t('turnsCount')})` : ''}
+        <span className="ch-card-rate">
+          {items.length ? `${items.length}` : '—'} {t('count')}
+          {turns.length > 0 ? ` · ${turns.length} ${t('turnsCount')}` : ''}
         </span>
       }
     >
@@ -235,6 +249,25 @@ export function ActivityTimeline({
               </svg>
             </div>
           </div>
+          {turns.length > 0 && turns.length <= 24 && (
+            <div className="ch-turn-strip" role="group" aria-label={t('turnsLabel')}>
+              {turns.map((turn) => (
+                <button
+                  key={turn.turn}
+                  type="button"
+                  className={`ch-turn-pill ${turn.turn === activeTurn ? 'is-active' : ''}`}
+                  style={{ flex: Math.max(1, turn.end - turn.start + 1) }}
+                  title={`${t('turnShort')} ${turn.turn}`}
+                  onClick={() => {
+                    const target = items[turn.end]
+                    if (target) onFocus(target.id)
+                  }}
+                >
+                  {turn.turn}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="ch-scrubber-row">
             <input
               className="ch-sequence-slider"
@@ -265,8 +298,11 @@ export function ActivityTimeline({
             >
               <div className="ch-step-brief-top">
                 <div className="ch-step-brief-meta">
+                  <strong className="ch-sb-turn">
+                    {t('turnShort')} {activeTurn} · #{previewIndex + 1} {t('stepOf')} {items.length}
+                  </strong>
                   <b data-seq={preview.seq} title={`Seq ${preview.seq}`}>
-                    #{previewIndex + 1}
+                    #{preview.seq}
                   </b>
                   <span className={`ch-dot-pill ${preview.isError === true ? 'is-err' : ''}`}>
                     <i
@@ -277,29 +313,63 @@ export function ActivityTimeline({
                     />
                     {preview.isError === true ? t('failed') : t(preview.kind)}
                   </span>
-                  <span className="ch-step-brief-time">
-                    T{turnByIndex[previewIndex] ?? 1}
-                    {preview.time !== undefined ? ` · ${fmtTime(preview.time)}` : ''}
-                  </span>
                 </div>
-                {previewPair && (
+                <div className="ch-sb-right">
+                  {preview.time !== undefined && (
+                    <span className="ch-step-brief-time">{fmtTime(preview.time)}</span>
+                  )}
+                  {previewPair && (
+                    <button
+                      type="button"
+                      className="ch-mini-button ch-pair-jump"
+                      onClick={() => onFocus(previewPair.id)}
+                    >
+                      {previewPair.eventType === 'tool/result'
+                        ? `${t('jumpResult')} ↗`
+                        : `${t('jumpCall')} ↖`}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="ch-sb-rows">
+                {turnUserRecord && (
                   <button
-                    className="ch-mini-button ch-pair-jump"
-                    onClick={() => onFocus(previewPair.id)}
+                    type="button"
+                    className="ch-sb-row"
+                    onClick={() => onFocus(turnUserRecord.id)}
                   >
-                    {previewPair.eventType === 'tool/result'
-                      ? `${t('jumpResult')} ↗`
-                      : `${t('jumpCall')} ↖`}
+                    <span className="ch-sb-tag">{t('stepUser')}</span>
+                    <span className="ch-sb-text">
+                      {previewLine(turnUserRecord.text, 120) || t('user')}
+                    </span>
                   </button>
                 )}
-              </div>
-              <div className="ch-step-brief-text">
-                {previewLine(
-                  preview.title === 'user' || preview.title === 'assistant'
-                    ? preview.text
-                    : preview.title,
-                  140,
-                ) || t(preview.kind)}
+                <button type="button" className="ch-sb-row" onClick={() => onFocus(preview.id)}>
+                  <span className="ch-sb-tag">{t('stepRecord')}</span>
+                  <span className="ch-sb-chip">
+                    <span className="ch-sb-chip-tool">{preview.toolName ?? t(preview.kind)}</span>
+                    <span className="ch-sb-text">
+                      {previewLine(
+                        preview.title === 'user' || preview.title === 'assistant'
+                          ? preview.text
+                          : preview.title,
+                        120,
+                      ) || t(preview.kind)}
+                    </span>
+                  </span>
+                </button>
+                {turnReplyRecord && turnReplyRecord.id !== preview.id && (
+                  <button
+                    type="button"
+                    className="ch-sb-row"
+                    onClick={() => onFocus(turnReplyRecord.id)}
+                  >
+                    <span className="ch-sb-tag">{t('stepReply')}</span>
+                    <span className="ch-sb-text">
+                      {previewLine(turnReplyRecord.text, 120) || t('assistant')}
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -310,126 +380,31 @@ export function ActivityTimeline({
   )
 }
 
-function fileExtension(path: string): string {
-  const base = path.split(/[\\/]/).at(-1) ?? path
-  const dot = base.lastIndexOf('.')
-  if (dot <= 0 || dot === base.length - 1) return 'FILE'
-  return base.slice(dot + 1).toUpperCase().slice(0, 5)
+function initialsOf(text: string): string {
+  const words = text
+    .replace(/[^a-zA-Z0-9\u4e00-\u9fa5\s]/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase()
+  return (text.trim().slice(0, 2) || 'CH').toUpperCase()
 }
 
-function splitFilePath(path: string): { dir: string; base: string } {
-  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  if (slash < 0) return { dir: '', base: path }
-  return { dir: path.slice(0, slash + 1), base: path.slice(slash + 1) }
-}
-
-function renderShellTokens(command: string): ReactElement {
-  const tokens = command.split(/(\s+|&&|\|\||\|)/)
-  let firstWordSeen = false
-  return (
-    <>
-      {tokens.map((token, index) => {
-        if (!token) return null
-        if (/^\s+$/.test(token)) return <Fragment key={index}>{token}</Fragment>
-        if (token === '&&' || token === '||' || token === '|')
-          return (
-            <span key={index} className="ch-sh-op">
-              {token}
-            </span>
-          )
-        if (!firstWordSeen) {
-          firstWordSeen = true
-          return (
-            <span key={index} className="ch-sh-prog">
-              {token}
-            </span>
-          )
-        }
-        if (token.startsWith('-'))
-          return (
-            <span key={index} className="ch-sh-flag">
-              {token}
-            </span>
-          )
-        return <Fragment key={index}>{token}</Fragment>
-      })}
-    </>
-  )
-}
-
-export function SignalsCard({
-  tab,
-  onTab,
-  summary,
+export function SessionNetworkCard({
   related,
   currentTitle,
   currentHarness,
-  items,
-  onFocus,
+  currentUsage,
   onSelect,
   t,
 }: {
-  tab: SignalTab
-  onTab: (tab: SignalTab) => void
-  summary: ActivitySummary | null
   related: readonly RelatedSession[]
   currentTitle: string
   currentHarness: string
-  items: readonly HistoryItem[]
-  onFocus: (id: string) => void
+  currentUsage: Usage | null
   onSelect: (id: string) => void
   t: Translate
 }): ReactElement {
-  const [fileFilter, setFileFilter] = useState<'all' | 'reads' | 'writes' | 'searches'>('all')
-  const [fileQuery, setFileQuery] = useState('')
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(() => new Set())
-  const [cmdFilter, setCmdFilter] = useState<'all' | 'ok' | 'err'>('all')
-  const [cmdProgram, setCmdProgram] = useState<string | null>(null)
-
-  const recordIndexById = useMemo(
-    () => new Map(items.map((item, idx) => [item.id, { seq: item.seq, pos: idx + 1, item }])),
-    [items],
-  )
-
-  const files = summary?.files ?? []
-  const filteredFiles = useMemo(() => {
-    const needle = fileQuery.trim().toLocaleLowerCase()
-    return files.filter((file) => {
-      if (fileFilter !== 'all' && file[fileFilter] === 0) return false
-      if (!needle) return true
-      return file.path.toLocaleLowerCase().includes(needle)
-    })
-  }, [files, fileFilter, fileQuery])
-
-  const commands = summary?.commands ?? []
-  const failedCommandCount = useMemo(
-    () => commands.filter((command) => command.isError === true).length,
-    [commands],
-  )
-  const okCommandCount = useMemo(
-    () => commands.filter((command) => command.isError === false).length,
-    [commands],
-  )
-  const programs = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const command of commands) {
-      const prog = commandProgram(command.command)
-      counts.set(prog, (counts.get(prog) ?? 0) + 1)
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])
-  }, [commands])
-  const activeProgram =
-    cmdProgram !== null && programs.some(([prog]) => prog === cmdProgram) ? cmdProgram : null
-
-  const filteredCommands = useMemo(() => {
-    return commands.filter((command) => {
-      if (cmdFilter === 'err' && command.isError !== true) return false
-      if (cmdFilter === 'ok' && command.isError !== false) return false
-      if (activeProgram !== null && commandProgram(command.command) !== activeProgram) return false
-      return true
-    })
-  }, [commands, cmdFilter, activeProgram])
-
   const kindLabels = {
     subagent: 'relationSubagent',
     fork: 'relationFork',
@@ -438,318 +413,121 @@ export function SignalsCard({
   } as const
   const parents = related.filter((row) => row.role === 'parent')
   const children = related.filter((row) => row.role === 'child')
-
+  const occ = occupancyOf(currentUsage)
   return (
-    <section className="ch-card ch-signals-card">
-      <div className="ch-tab-bar" role="tablist">
-        <button
-          role="tab"
-          aria-selected={tab === 'files'}
-          className={`ch-tab-btn ${tab === 'files' ? 'is-active' : ''}`}
-          onClick={() => onTab('files')}
-        >
-          {t('files')}
-          <span className="ch-tab-count">{summary?.files.length ?? '—'}</span>
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === 'commands'}
-          className={`ch-tab-btn ${tab === 'commands' ? 'is-active' : ''}`}
-          onClick={() => onTab('commands')}
-        >
-          {t('commands')}
-          <span className="ch-tab-count">{summary?.commands.length ?? '—'}</span>
-          {failedCommandCount > 0 && <span className="ch-tab-err">{failedCommandCount}!</span>}
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === 'family'}
-          className={`ch-tab-btn ${tab === 'family' ? 'is-active' : ''}`}
-          onClick={() => onTab('family')}
-        >
-          {t('loadedFamily')}
-          <span className="ch-tab-count">{related.length}</span>
-        </button>
-      </div>
-
-      {tab === 'files' && (
-        <div className="ch-signal-panel ch-file-card">
-          {files.length > 0 && (
-            <div className="ch-subfilter-row">
-              <div className="ch-chip-group">
-                {(
-                  [
-                    ['all', t('all'), files.length],
-                    ['reads', t('reads'), files.filter((file) => file.reads > 0).length],
-                    ['writes', t('writes'), files.filter((file) => file.writes > 0).length],
-                    ['searches', t('searches'), files.filter((file) => file.searches > 0).length],
-                  ] as const
-                ).map(([key, label, count]) => (
+    <Card
+      title={t('loadedFamily')}
+      className="ch-family-card"
+      aside={
+        <span className="ch-card-rate">
+          <b>{related.length + 1}</b> {t('linkedNodes')}
+        </span>
+      }
+    >
+      {related.length === 0 ? (
+        <p className="ch-note">{t('noFamily')}</p>
+      ) : (
+        <div className="ch-net-stage">
+          {parents.length > 0 && (
+            <>
+              <div className="ch-net-tier">
+                {parents.map((row) => (
                   <button
-                    key={key}
-                    className={`ch-chip ${fileFilter === key ? 'is-active' : ''}`}
-                    aria-pressed={fileFilter === key}
-                    onClick={() => setFileFilter(key)}
+                    key={`${row.role}:${row.id}`}
+                    type="button"
+                    className="ch-net-node ch-family-row"
+                    title={row.title || row.id}
+                    onClick={() => onSelect(row.id)}
                   >
-                    {label} {count}
+                    <div className="ch-net-head">
+                      <span className="ch-net-av is-parent">{initialsOf(row.title || row.id)}</span>
+                      <b className="ch-net-title">{row.title || row.id}</b>
+                      <span className="ch-meta-tag">{t(kindLabels[row.kind])}</span>
+                    </div>
+                    <div className="ch-net-foot">
+                      <span>
+                        {t('parentConversation')}
+                        {row.harness ? ` · ${row.harness}` : ''}
+                      </span>
+                      <span aria-hidden="true">↗</span>
+                    </div>
                   </button>
                 ))}
               </div>
-              <input
-                className="ch-mini-input"
-                value={fileQuery}
-                onChange={(event) => setFileQuery(event.target.value)}
-                placeholder={t('filterPath')}
-                aria-label={t('filterPath')}
-              />
-            </div>
-          )}
-          {!summary || files.length === 0 ? (
-            <p className="ch-note">{t(summary ? 'noFiles' : 'unavailable')}</p>
-          ) : filteredFiles.length === 0 ? (
-            <p className="ch-note">{t('noMatches')}</p>
-          ) : (
-            <div className="ch-file-list">
-              {filteredFiles.map((file) => {
-                const { dir, base } = splitFilePath(file.path)
-                const expanded = expandedFiles.has(file.path)
-                return (
-                  <div key={file.path} className="ch-file-item">
-                    <div className="ch-file-row-wrap">
-                      {file.recordIds.length > 1 && (
-                        <button
-                          className="ch-file-expand"
-                          aria-expanded={expanded}
-                          aria-label={t('openOperations')}
-                          onClick={() =>
-                            setExpandedFiles((previous) => {
-                              const next = new Set(previous)
-                              if (next.has(file.path)) next.delete(file.path)
-                              else next.add(file.path)
-                              return next
-                            })
-                          }
-                        >
-                          {expanded ? '▾' : '▸'}
-                        </button>
-                      )}
-                      <button
-                        className="ch-file-row"
-                        title={file.path}
-                        onClick={() => onFocus(file.recordIds[0])}
-                      >
-                        <div className="ch-file-left">
-                          <span className="ch-ext-badge">{fileExtension(file.path)}</span>
-                          <span className="ch-file-path">
-                            {dir && <span className="ch-file-dir">{dir}</span>}
-                            <strong>{base}</strong>
-                          </span>
-                        </div>
-                        <span className="ch-op-badges">
-                          {file.reads > 0 && (
-                            <i className="ch-op-tag">
-                              <em className="is-tool" />
-                              {t('readShort')} {file.reads}
-                            </i>
-                          )}
-                          {file.writes > 0 && (
-                            <i className="ch-op-tag">
-                              <em className="is-assistant" />
-                              {t('writeShort')} {file.writes}
-                            </i>
-                          )}
-                          {file.searches > 0 && (
-                            <i className="ch-op-tag">
-                              <em className="is-warn" />
-                              {t('searchShort')} {file.searches}
-                            </i>
-                          )}
-                        </span>
-                      </button>
-                    </div>
-                    {expanded && file.recordIds.length > 1 && (
-                      <div className="ch-file-ops">
-                        {file.recordIds.map((recordId) => {
-                          const entry = recordIndexById.get(recordId)
-                          return (
-                            <button
-                              key={recordId}
-                              className="ch-op-jump"
-                              onClick={() => onFocus(recordId)}
-                            >
-                              ↗ {entry?.item.toolName ?? t('tool')} #{entry?.pos ?? ''}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === 'commands' && (
-        <div className="ch-signal-panel ch-command-card">
-          {commands.length > 0 && (
-            <>
-              <div className="ch-subfilter-row">
-                <div className="ch-chip-group">
-                  {(
-                    [
-                      ['all', t('all'), commands.length],
-                      ['ok', t('statusOk'), okCommandCount],
-                      ['err', t('failed'), failedCommandCount],
-                    ] as const
-                  ).map(([key, label, count]) => (
-                    <button
-                      key={key}
-                      className={`ch-chip ${cmdFilter === key ? 'is-active' : ''}`}
-                      aria-pressed={cmdFilter === key}
-                      onClick={() => {
-                        setCmdFilter(key)
-                        if (key === 'all') setCmdProgram(null)
-                      }}
-                    >
-                      {label} {count}
-                    </button>
-                  ))}
-                </div>
-                <span className="ch-note">{t('programFilter')}</span>
-              </div>
-              {programs.length > 0 && (
-                <div className="ch-prog-bars">
-                  {programs.map(([prog, count]) => (
-                    <button
-                      key={prog}
-                      className={`ch-prog-chip ${activeProgram === prog ? 'is-active' : ''}`}
-                      aria-pressed={activeProgram === prog}
-                      onClick={() => setCmdProgram((prev) => (prev === prog ? null : prog))}
-                    >
-                      <span>{prog}</span>
-                      <b>×{count}</b>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <svg className="ch-net-connector" viewBox="0 0 600 22" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M300,0 C300,11 300,11 300,22" />
+              </svg>
             </>
           )}
-          {!summary || commands.length === 0 ? (
-            <p className="ch-note">{t(summary ? 'noCommands' : 'unavailable')}</p>
-          ) : filteredCommands.length === 0 ? (
-            <p className="ch-note">{t('noMatches')}</p>
-          ) : (
-            <div className="ch-command-list">
-              {filteredCommands.map((command) => (
-                <div
-                  key={command.id}
-                  className={`ch-command-row ${command.isError ? 'is-error' : ''}`}
-                >
-                  <button className="ch-command-main" onClick={() => onFocus(command.recordId)}>
-                    <span
-                      className={
-                        command.isError
-                          ? 'ch-cmd-status ch-result-error'
-                          : command.resultId && command.isError === false
-                            ? 'ch-cmd-status ch-result-known'
-                            : 'ch-cmd-status ch-result-state'
-                      }
-                      title={t(
-                        command.isError ? 'failed' : command.resultId ? 'completed' : 'pending',
-                      )}
-                    >
-                      {command.isError
-                        ? '!'
-                        : command.resultId
-                          ? command.isError === false
-                            ? '✓'
-                            : '↳'
-                          : '…'}
-                    </span>
-                    <span className="ch-command-seq">#{command.seq}</span>
-                    <code>{renderShellTokens(command.command)}</code>
-                  </button>
-                  {command.resultId && (
-                    <button
-                      className="ch-command-result"
-                      onClick={() => onFocus(command.resultId!)}
-                    >
-                      {t('toolOutput')} ↗
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
-      {tab === 'family' && (
-        <div className="ch-signal-panel ch-family-card">
-          {related.length === 0 ? (
-            <p className="ch-note">{t('noFamily')}</p>
-          ) : (
-            <div className="ch-family-list">
-              {parents.map((row) => (
-                <button
-                  key={`${row.role}:${row.id}`}
-                  className="ch-family-row"
-                  title={row.title || row.id}
-                  onClick={() => onSelect(row.id)}
-                >
-                  <div className="ch-family-node-main">
-                    <div className="ch-family-node-tags">
-                      <span className="ch-dot-pill">
-                        <i className="is-user" />
-                        {t('parentConversation')} · {t(kindLabels[row.kind])}
-                      </span>
-                      {row.harness && <span className="ch-meta-tag">{row.harness}</span>}
-                    </div>
-                    <b>{row.title || row.id}</b>
-                  </div>
-                  <span aria-hidden="true">↗</span>
-                </button>
-              ))}
-              <div className="ch-family-current">
-                <div className="ch-family-node-main">
-                  <div className="ch-family-node-tags">
-                    <span className="ch-dot-pill">
-                      <i className="is-assistant" />
-                      {t('currentSession')}
-                    </span>
-                    <span className="ch-meta-tag">{currentHarness}</span>
-                  </div>
-                  <b>{currentTitle}</b>
-                </div>
-                <span aria-hidden="true">●</span>
+          <div className="ch-net-tier">
+            <div className="ch-net-node is-current">
+              <div className="ch-net-head">
+                <span className="ch-net-av is-current">{initialsOf(currentHarness)}</span>
+                <b className="ch-net-title" title={currentTitle}>
+                  {currentTitle}
+                </b>
+                <span className="ch-meta-tag is-current">{t('currentSession')}</span>
               </div>
-              {children.map((row) => (
-                <button
-                  key={`${row.role}:${row.id}`}
-                  className="ch-family-row is-child"
-                  title={row.title || row.id}
-                  onClick={() => onSelect(row.id)}
-                >
-                  <div className="ch-family-node-main">
-                    <div className="ch-family-node-tags">
-                      <span className="ch-dot-pill">
-                        <i className="is-event" />
-                        {t(kindLabels[row.kind])}
-                      </span>
-                      {row.harness && <span className="ch-meta-tag">{row.harness}</span>}
-                    </div>
-                    <b>{row.title || row.id}</b>
-                  </div>
-                  <span aria-hidden="true">↗</span>
-                </button>
-              ))}
+              <div className="ch-net-bar">
+                <i style={{ width: `${Math.min(100, occ?.percent ?? 0)}%` }} />
+              </div>
+              <div className="ch-net-foot">
+                <span>
+                  {currentHarness}
+                  {occ?.used !== undefined && occ.capacity !== undefined
+                    ? ` · ${fmt(occ.used)} / ${fmt(occ.capacity)}`
+                    : ''}
+                </span>
+                <b>{occ ? `${occ.percent.toFixed(1)}%` : '—'}</b>
+              </div>
             </div>
+          </div>
+
+          {children.length > 0 && (
+            <>
+              <svg className="ch-net-connector" viewBox="0 0 600 22" preserveAspectRatio="none" aria-hidden="true">
+                {children.length === 1 ? (
+                  <path d="M300,0 C300,11 300,11 300,22" />
+                ) : (
+                  children.slice(0, 4).map((child, idx, arr) => {
+                    const targetX = 120 + (idx / (arr.length - 1)) * 360
+                    return (
+                      <path
+                        key={child.id}
+                        d={`M300,0 C300,12 ${targetX.toFixed(0)},10 ${targetX.toFixed(0)},22`}
+                      />
+                    )
+                  })
+                )}
+              </svg>
+              <div className="ch-net-tier">
+                {children.map((row) => (
+                  <button
+                    key={`${row.role}:${row.id}`}
+                    type="button"
+                    className="ch-net-node ch-family-row is-child"
+                    title={row.title || row.id}
+                    onClick={() => onSelect(row.id)}
+                  >
+                    <div className="ch-net-head">
+                      <span className="ch-net-av is-child">{initialsOf(row.title || row.id)}</span>
+                      <b className="ch-net-title">{row.title || row.id}</b>
+                      <span className="ch-meta-tag">{t(kindLabels[row.kind])}</span>
+                    </div>
+                    <div className="ch-net-foot">
+                      <span>{row.harness ?? 'CodexHost'}</span>
+                      <span aria-hidden="true">↗</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
-          <p className="ch-note">{t('familyScope')}</p>
         </div>
       )}
-    </section>
+      <p className="ch-note">{t('familyScope')}</p>
+    </Card>
   )
 }
+

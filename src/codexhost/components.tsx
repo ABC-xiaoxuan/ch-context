@@ -1,7 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
 import { Donut } from '../client/components/donut.tsx'
 import { fmt, fmtDuration, fmtTime } from '../client/format.ts'
-import type { ActivitySummary } from './activity.ts'
 import type { HistoryItem } from './api.ts'
 import { occupancyOf, tokenParts, type Sample, type Usage } from './model.ts'
 import type { Translate } from './i18n.ts'
@@ -98,7 +97,7 @@ function Sparkline({
   const points = samples.map((sample, index) => {
     const x = samples.length === 1 ? 210 : 12 + (index / (samples.length - 1)) * 396
     const clamped = Math.min(100, Math.max(0, sample.percent))
-    const y = 42 - ((clamped - minP) / spanP) * 34
+    const y = 38 - ((clamped - minP) / spanP) * 30
     return { x, y, sample }
   })
   const linePath = points
@@ -106,7 +105,7 @@ function Sparkline({
     .join(' ')
   const areaPath =
     points.length > 1
-      ? `${linePath} L${points[points.length - 1].x.toFixed(1)},47 L${points[0].x.toFixed(1)},47 Z`
+      ? `${linePath} L${points[points.length - 1].x.toFixed(1)},43 L${points[0].x.toFixed(1)},43 Z`
       : ''
   return (
     <div className={`ch-spark-box is-${tone}`} title={t('timelineNote')}>
@@ -120,14 +119,9 @@ function Sparkline({
               : `${samples.length} ${t('points')} · ${first!.percent.toFixed(1)}% → ${last!.percent.toFixed(1)}% (${delta !== null && delta >= 0 ? '+' : ''}${delta?.toFixed(1)}%)`}
         </strong>
       </div>
-      <svg
-        className="ch-spark-svg"
-        viewBox="0 0 420 50"
-        role="img"
-        aria-label={t('sampled')}
-      >
+      <svg className="ch-spark-svg" viewBox="0 0 420 46" role="img" aria-label={t('sampled')}>
         <line x1="0" y1="10" x2="420" y2="10" className="ch-chart-grid" />
-        <line x1="0" y1="28" x2="420" y2="28" className="ch-chart-grid" />
+        <line x1="0" y1="26" x2="420" y2="26" className="ch-chart-grid" />
         {areaPath && <path d={areaPath} className="ch-spark-area" />}
         {linePath && <path d={linePath} className="ch-chart-line" />}
         {points.map((point, index) => (
@@ -151,10 +145,12 @@ function Sparkline({
 export function ContextCard({
   usage,
   samples,
+  harness,
   t,
 }: {
   usage: Usage | null
   samples: readonly Sample[]
+  harness: string
   t: Translate
 }): ReactElement {
   const occupancy = occupancyOf(usage)
@@ -169,30 +165,25 @@ export function ContextCard({
     usage?.contextUsedTokens !== undefined && usage?.contextWindowTokens !== undefined
       ? Math.max(0, usage.contextWindowTokens - usage.contextUsedTokens)
       : undefined
+  const remainingPct = ratio !== undefined ? Math.max(0, 100 - ratio) : undefined
   return (
     <Card
       title={t('context')}
       className={`ch-context-card is-${tone}`}
       aside={
-        <span className="ch-scope" title={t('limitsNote')}>
-          {t('source')} ⓘ
+        <span className="ch-card-rate" title={t('limitsNote')}>
+          {t('source')} · <b>{harness}</b>
         </span>
       }
     >
-      <div className="ch-context-line">
-        <div className="ch-occupancy-number">
-          <strong>{ratio === undefined ? '—' : `${ratio.toFixed(1)}%`}</strong>
+      <div className="ch-ctx-hero">
+        <div className="ch-ctx-hero-left">
+          <b>{fmt(usage?.contextUsedTokens)}</b>
+          <span>/ {fmt(usage?.contextWindowTokens)} tokens</span>
         </div>
-        <div className="ch-context-tokens">
-          <p>
-            <b>{fmt(usage?.contextUsedTokens)}</b>
-            <span> / {fmt(usage?.contextWindowTokens)} tokens</span>
-          </p>
-          <span className="ch-remain-pill">
-            {remaining === undefined
-              ? t('capacityUnknown')
-              : `${t('remainingShort')} ${fmt(remaining)}`}
-          </span>
+        <div className="ch-ctx-hero-right ch-occupancy-number">
+          <strong>{ratio === undefined ? '—' : `${ratio.toFixed(1)}%`}</strong>
+          <span>{t('ofContextUsed')}</span>
         </div>
       </div>
       <div className="ch-gauge-wrap">
@@ -202,15 +193,34 @@ export function ContextCard({
           aria-label={`${t('occupancy')}: ${ratio === undefined ? t('unavailable') : ratio.toFixed(1) + '%'}`}
         >
           <span style={{ width: `${Math.min(100, ratio ?? 0)}%` }} />
-          <i className="ch-gauge-tick" style={{ left: '75%' }} aria-hidden="true" />
-          <i className="ch-gauge-tick" style={{ left: '90%' }} aria-hidden="true" />
+          <i className="ch-reserve-zone" aria-hidden="true" title={t('cautionZone')} />
         </div>
-        <div className="ch-context-values">
-          <span>
-            {t('used')}: {fmt(usage?.contextUsedTokens)}
+        <div className="ch-ctx-legend ch-context-values">
+          <span className="ch-ctx-leg">
+            <i className="is-used" />
+            <b>{t('usedShort')}</b>
+            <em>
+              {fmt(usage?.contextUsedTokens)}
+              {ratio === undefined ? '' : ` · ${ratio.toFixed(1)}%`}
+            </em>
           </span>
-          <span>
-            {t('capacity')}: {fmt(usage?.contextWindowTokens)}
+          <span className="ch-ctx-leg">
+            <i className="is-rem" />
+            <b>{t('remainingShort')}</b>
+            <em>
+              {remaining === undefined
+                ? '—'
+                : `${fmt(remaining)}${remainingPct === undefined ? '' : ` · ${remainingPct.toFixed(1)}%`}`}
+            </em>
+          </span>
+          <span className="ch-ctx-leg">
+            <i className="is-cap" />
+            <b>{t('capacity')}</b>
+            <em>{fmt(usage?.contextWindowTokens)}</em>
+          </span>
+          <span className="ch-ctx-leg">
+            <i className="is-hatch" />
+            <em>{t('cautionZone')}</em>
           </span>
         </div>
       </div>
@@ -240,24 +250,22 @@ export function UsageCard({ usage, t }: { usage: Usage | null; t: Translate }): 
         : usage.costSource === 'publicPrice'
           ? t('costEstimate')
           : t('source')
+  const cacheRate = usage?.cacheHitRatePercent ?? usage?.sessionCacheHitRatePercent
+  const cacheRateLabel = usage?.cacheHitRatePercent !== undefined ? t('cacheHit') : t('avgCache')
   return (
     <Card
       title={t('cumulative')}
       className="ch-token-card"
       aside={
-        <span className="ch-cost-badge" title={lowerBound ? t('partialPrice') : costLabel}>
-          <b>
-            {usage?.totalCostUsd === undefined
-              ? '—'
-              : `${lowerBound ? '≥ ' : ''}${formatUsd(usage.totalCostUsd)}`}
-          </b>
-          <small>{costLabel}</small>
+        <span className="ch-card-rate">
+          {cacheRateLabel}{' '}
+          <b>{cacheRate === undefined ? '—' : `${cacheRate.toFixed(1)}%`}</b>
         </span>
       }
     >
       <div className="ch-token-layout">
         <Donut
-          size={108}
+          size={106}
           segments={parts.map((part) => ({
             key: part.kind,
             value: part.value,
@@ -268,24 +276,31 @@ export function UsageCard({ usage, t }: { usage: Usage | null; t: Translate }): 
           hoverKey={hover}
           onHoverKey={setHover}
         />
-        <div className="ch-token-legend">
+        <div className="ch-token-body">
           {parts.length ? (
-            parts.map((part) => (
-              <button
-                key={part.kind}
-                className={hover === part.kind ? 'is-hi' : ''}
-                title={`${t(part.kind)}: ${part.value}`}
-                onMouseEnter={() => setHover(part.kind)}
-                onMouseLeave={() => setHover(null)}
-                onFocus={() => setHover(part.kind)}
-                onBlur={() => setHover(null)}
-              >
-                <span className="ch-swatch" style={{ background: PART_COLORS[part.kind] }} />
-                <span>{t(part.kind)}</span>
-                <b>{fmt(part.value)}</b>
-                <small>{sum > 0 ? `${((part.value / sum) * 100).toFixed(1)}%` : '—'}</small>
-              </button>
-            ))
+            <div className="ch-sl-grid">
+              {parts.map((part) => (
+                <button
+                  key={part.kind}
+                  type="button"
+                  className={`ch-sl-item ${hover === part.kind ? 'is-hi' : ''}`}
+                  title={`${t(part.kind)}: ${part.value}`}
+                  onMouseEnter={() => setHover(part.kind)}
+                  onMouseLeave={() => setHover(null)}
+                  onFocus={() => setHover(part.kind)}
+                  onBlur={() => setHover(null)}
+                >
+                  <span className="ch-sl-top">
+                    <span className="ch-swatch" style={{ background: PART_COLORS[part.kind] }} />
+                    <span className="ch-sl-label">{t(part.kind)}</span>
+                    <b className="ch-sl-pct">
+                      {sum > 0 ? `${((part.value / sum) * 100).toFixed(1)}%` : '—'}
+                    </b>
+                  </span>
+                  <span className="ch-sl-sub">{fmt(part.value)}</span>
+                </button>
+              ))}
+            </div>
           ) : (
             <dl className="ch-metrics">
               <Metric label={t('input')} value={usage?.inputTokens} />
@@ -303,59 +318,80 @@ export function UsageCard({ usage, t }: { usage: Usage | null; t: Translate }): 
         </div>
       </div>
       <div className="ch-token-footer">
-        <span title={t('inputIncludesCache')}>
-          {t('total')} <b>{fmt(usage?.totalTokens)}</b>
+        <span title={lowerBound ? t('partialPrice') : costLabel}>
+          {t('cost')}{' '}
+          <b>
+            {usage?.totalCostUsd === undefined
+              ? '—'
+              : `${lowerBound ? '≥ ' : ''}${formatUsd(usage.totalCostUsd)}`}
+          </b>
+          {usage?.totalCostUsd !== undefined && <small className="ch-foot-sub"> · {costLabel}</small>}
         </span>
-        {usage?.reasoningOutputTokens !== undefined && (
-          <span className="ch-dot-pill">
-            <i className="is-event" />
-            {t('reasoningOutput')} {fmt(usage.reasoningOutputTokens)}
+        <div className="ch-token-foot-right">
+          <span title={t('inputIncludesCache')}>
+            {t('total')} <b>{fmt(usage?.totalTokens)}</b>
           </span>
-        )}
+          {usage?.reasoningOutputTokens !== undefined && (
+            <span className="ch-dot-pill">
+              <i className="is-event" />
+              {t('reasoningOutput')} {fmt(usage.reasoningOutputTokens)}
+            </span>
+          )}
+        </div>
       </div>
       {lowerBound && <p className="ch-note">{t('partialPrice')}</p>}
     </Card>
   )
 }
 
-function CacheBar({ label, value }: { label: string; value?: number }): ReactElement {
+function CacheBar({
+  label,
+  value,
+  tone = 'teal',
+}: {
+  label: string
+  value?: number
+  tone?: 'teal' | 'blue'
+}): ReactElement {
   return (
     <div className="ch-cache-row">
       <span>{label}</span>
       <div className="ch-cache-track">
-        <i style={{ width: `${Math.min(100, value ?? 0)}%` }} />
+        <i className={`is-${tone}`} style={{ width: `${Math.min(100, value ?? 0)}%` }} />
       </div>
       <b>{value === undefined ? '—' : `${value.toFixed(1)}%`}</b>
     </div>
   )
 }
 
+const STRIP_COLOR = {
+  user: 'var(--ch-green)',
+  assistant: 'var(--ch-blue)',
+  tool: 'var(--ch-teal)',
+  event: 'var(--ch-purple)',
+}
+
 export function PerformanceCard({
   usage,
-  summary,
-  errorCount,
-  onKind,
-  onSignalTab,
-  onErrors,
+  items,
+  onSelectRecord,
   t,
 }: {
   usage: Usage | null
-  summary: ActivitySummary | null
-  errorCount: number
-  onKind: (kind: 'messages' | 'tool' | 'event') => void
-  onSignalTab: (tab: 'files' | 'commands') => void
-  onErrors: () => void
+  items: readonly HistoryItem[]
+  onSelectRecord: (id: string) => void
   t: Translate
 }): ReactElement {
+  const tps = usage?.outputTokensPerSecond ?? usage?.sessionOutputTokensPerSecond
+  const tpsLabel = usage?.outputTokensPerSecond !== undefined ? t('tps') : t('avgTps')
+  const midIndex = Math.floor(items.length / 2)
   return (
     <Card
       title={t('performance')}
       className="ch-performance-card"
       aside={
-        <span className="ch-scope">
-          {usage?.cacheHitRatePercent === undefined
-            ? t('unavailable')
-            : `${t('cacheHit')} ${usage.cacheHitRatePercent.toFixed(1)}%`}
+        <span className="ch-card-rate">
+          {tpsLabel} <b>{tps === undefined ? '—' : `${tps.toFixed(1)} tok/s`}</b>
         </span>
       }
     >
@@ -372,30 +408,45 @@ export function PerformanceCard({
         )}
       </dl>
       <div className="ch-cache-bars">
-        <CacheBar label={t('cacheHit')} value={usage?.cacheHitRatePercent} />
-        <CacheBar label={t('avgCache')} value={usage?.sessionCacheHitRatePercent} />
+        <CacheBar label={t('cacheHit')} value={usage?.cacheHitRatePercent} tone="teal" />
+        <CacheBar label={t('avgCache')} value={usage?.sessionCacheHitRatePercent} tone="blue" />
       </div>
-      <div className="ch-pulse-ribbon">
-        <button className="ch-pulse-pill" onClick={() => onKind('messages')}>
-          <i className="is-user" />
-          {t('messages')} <b>{summary?.messages ?? '—'}</b>
-        </button>
-        <button className="ch-pulse-pill" onClick={() => onKind('tool')}>
-          <i className="is-tool" />
-          {t('tools')} <b>{summary ? summary.toolCalls + summary.toolResults : '—'}</b>
-        </button>
-        <button className="ch-pulse-pill" onClick={() => onSignalTab('files')}>
-          <i className="is-assistant" />
-          {t('files')} <b>{summary?.files.length ?? '—'}</b>
-        </button>
-        <button className="ch-pulse-pill" onClick={() => onSignalTab('commands')}>
-          <i className="is-event" />
-          {t('commands')} <b>{summary?.commands.length ?? '—'}</b>
-        </button>
-        {errorCount > 0 && (
-          <button className="ch-pulse-pill is-err" onClick={onErrors}>
-            ! {t('failed')} <b>{errorCount}</b>
-          </button>
+      <div className="ch-tstrip">
+        <div className="ch-tstrip-head">
+          <span>{t('windowActivityStrip')}</span>
+          <span>
+            {items.length > 0 ? `#${items[0].seq} → #${items.at(-1)!.seq}` : t('unavailable')}
+          </span>
+        </div>
+        <div
+          className={`ch-tstrip-bar ${items.length > 60 ? 'is-dense' : ''}`}
+          role="group"
+          aria-label={t('windowActivityStrip')}
+        >
+          {items.length === 0 ? (
+            <div className="ch-tstrip-empty" />
+          ) : (
+            items.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className="ch-tstrip-seg"
+                style={{
+                  background: item.isError === true ? 'var(--ch-danger)' : STRIP_COLOR[item.kind],
+                }}
+                title={`#${item.seq} · ${item.toolName ?? t(item.kind)}`}
+                aria-label={`#${item.seq} ${item.toolName ?? t(item.kind)}`}
+                onClick={() => onSelectRecord(item.id)}
+              />
+            ))
+          )}
+        </div>
+        {items.length > 0 && (
+          <div className="ch-tstrip-axis">
+            <span>#{items[0].seq}</span>
+            {items.length > 2 && <span>#{items[midIndex].seq}</span>}
+            <span>#{items.at(-1)!.seq}</span>
+          </div>
         )}
       </div>
     </Card>

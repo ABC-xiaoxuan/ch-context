@@ -6,7 +6,9 @@ import { recordOf } from './model.ts'
 import { type ClientContext, type ViewProps } from './hooks.ts'
 import styles from './styles.css'
 import telemetryStyles from './telemetry.css'
+import overviewStyles from './overview.css'
 import inspectorStyles from './inspector.css'
+import activityStyles from './activity.css'
 import richTextStyles from './richtext.css'
 import surfaceStyles from './legacy-surface.css'
 
@@ -54,7 +56,11 @@ export function apply(ctx: ClientContext): void {
       '\n' +
       telemetryStyles +
       '\n' +
+      overviewStyles +
+      '\n' +
       inspectorStyles +
+      '\n' +
+      activityStyles +
       '\n' +
       richTextStyles +
       '\n' +

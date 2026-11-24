@@ -27,16 +27,14 @@ First marketplace registration requires the catalog maintainers' review. A publi
 
 ## Features
 
-- All-conversations Overview gallery with workspace filters, sorting and on-demand mini occupancy rings, alongside the Apple Neutral split inspection workbench.
-- Top telemetry cockpit featuring context occupancy with threshold markers and integrated live observation sparkline, cumulative token donut with reasoning output chip, and speed/cache efficiency with quick activity pulse pills.
-- Turn-banded linked activity timeline and context browser: paired call/result bridges, error pins, pointer/keyboard scrubbing, categories, sequence mode, current-window search, errors-only filter and previous/next navigation.
+- `dsh-context`-inspired Apple Neutral UI layout: top Context Stats ledger (5 summary wells + 2×2 clickable category ledger), paired Token Stats donut & Performance/Cache card with loaded-window activity sequence strip, and a linked split workbench.
+- Inline-expandable Context Browser: category accordions with subtle corner tinting, in-place structured tool-call argument tables and nested result cards, Find-in-Record match highlighting, a toggleable loaded-window character-volume treemap (strictly by text character length, never estimated tokens), and scoped keyboard shortcuts (`/` search, `[` / `]` step filtered records, `Esc` clear).
+- Full-width File Activity card (read/write/search filters, path search, sorting, extension badges and expandable operation trails), full-width 2-pane Command Executions card (summary KPIs, attention callouts, searchable program distribution bars, inline output previews), and visual Session Network node tree.
+- One-click Diagnostic Report export (copy Markdown or download `.md` / `.json`) summarizing reported usage, loaded-window activity, files, commands and relationships without inventing missing metrics.
+- Context Insights Overview dashboard with 2×3 KPI tiles, queried-session usage comparison chart, aggregate token distribution, 8-week updated-date activity heatmap, workspace/harness breakdowns, high-context and relation quick filters, and up to 3-session side-by-side comparison.
 - Markdown messages, tables, code blocks, raw-text view and copying. Raw mode preserves retained text verbatim; HTML stays escaped and remote images remain explicit links.
-- Host context occupancy and window capacity, separate from cumulative billed usage.
-- Native token/cache usage, cost, cache-hit rates, output speed and first-output latency when available. Partial cache telemetry stays independently visible; unknown values are not replaced with zeros.
-- File/shell-command activity links to actual source records and uniquely matched results. Explicit native tool errors stay visible, including orphan results.
-- Host-reported parent, fork, tree and subagent relationships on the loaded conversation page, with provenance kept distinct.
-- Bounded observations of context changes while the panel is open, clearly separate from complete historical model requests.
-- English/Chinese UI, theme support and responsive layouts.
+- Host context occupancy and window capacity, separate from cumulative billed usage. Unknown values stay `—` (never fabricated zeros).
+- English/Chinese UI, Light/Dark theme support and responsive container layouts.
 
 ## Build and verify
 
@@ -52,7 +50,7 @@ npm run pack:market
 
 `npm run check` performs strict type checking, focused Node tests, both builds, and native/compatibility package validation. Browser commands require installed Chrome/Edge/Chromium; set `CH_CONTEXT_CHROME_PATH` when needed. Synthetic fixtures exercise UI and lifecycle without model turns or real conversation data.
 
-`npm run pack:market` creates `dist/ch-context-0.3.2.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
+`npm run pack:market` creates `dist/ch-context-0.3.3.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
 
 Tracked prebuilt files `web/index.mjs`, `web/style.css` and `lib/client.js` must be rebuilt with source changes. CI rejects stale artifacts. Never change published ZIP bytes without increasing the manifest version.
 

@@ -204,7 +204,6 @@ try {
   await page.getByRole('button', { name: 'Latest history', exact: true }).click()
   await record(13)
   assert.equal(await page.locator('.ch-file-row').count(), 1)
-  await page.getByRole('tab', { name: /Shell commands/ }).click()
   assert.equal(await page.locator('.ch-command-row').count(), 1)
   await page.locator('.ch-command-main').first().click()
   await record(7)
@@ -219,13 +218,24 @@ try {
     await page.evaluate(() => navigator.clipboard.readText()),
     ' {"id":9007199254740993,"dup":1,"dup":2} ',
   )
+  await page.getByRole('button', { name: 'Find in record', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Find in this record…', exact: true }).fill('dup')
+  await page.waitForFunction(
+    () => document.querySelectorAll('.ch-record-content .ch-find-mark').length === 2,
+  )
+  await page.getByRole('button', { name: 'Find in record', exact: true }).click()
+  await page.getByRole('button', { name: 'Toggle character-volume treemap', exact: true }).click()
+  await page.locator('.ch-map-block').first().waitFor()
+  await page.getByRole('button', { name: 'Toggle character-volume treemap', exact: true }).click()
+  await page.locator('.ch-export-menu > summary').click()
+  await page.getByRole('menuitem', { name: 'Copy Markdown report', exact: true }).click()
+  assert.match(await page.evaluate(() => navigator.clipboard.readText()), /Context Diagnostic Report/)
   await page
     .locator('.ch-browser-card .ch-filter')
     .getByRole('button', { name: 'Messages', exact: true })
     .click()
   await record(13)
   await page.evaluate(() => window.chFixture.setChildHistoryFailure(true))
-  await page.getByRole('tab', { name: /Conversation relationships/ }).click()
   await page.locator('.ch-family-row').first().click()
   await page
     .getByText('This Harness has not reported usage for this conversation yet.', { exact: true })
@@ -241,7 +251,6 @@ try {
   await page.waitForFunction(
     () => document.querySelector('.ch-browser-card [role="alert"]') === null,
   )
-  await page.getByRole('tab', { name: /Conversation relationships/ }).click()
   await page.locator('.ch-family-row').first().click()
   await gauge('52.0%')
   await record(13)
@@ -458,7 +467,6 @@ try {
       '—',
     )
   }
-  await page.getByRole('tab', { name: /Conversation relationships/ }).click()
   await page.locator('.ch-family-row').first().click()
   await page
     .getByText('This Harness has not reported usage for this conversation yet.', { exact: true })
@@ -467,7 +475,6 @@ try {
     await page.evaluate(() => window.chFixture.openedSessions.at(-1)),
     '33333333-3333-4333-8333-333333333333',
   )
-  await page.getByRole('tab', { name: /Conversation relationships/ }).click()
   await page.locator('.ch-family-row').first().click()
   await gauge('125.0%')
   await page.evaluate(() => window.chFixture.denseHistory())
@@ -496,6 +503,13 @@ try {
   })
   await page.getByRole('heading', { name: 'Choose a conversation', exact: true }).waitFor()
   assert.equal(await page.locator('.ch-overview-card').count(), 3)
+  assert.ok((await page.locator('.ch-heat-cell').count()) >= 7)
+  await page.locator('.ch-compare-pin').nth(0).click()
+  await page.locator('.ch-compare-pin').nth(1).click()
+  await page.locator('.ch-compare-tray').waitFor()
+  assert.equal(await page.locator('.ch-compare-table thead th').count(), 3)
+  await page.getByRole('button', { name: 'Clear', exact: true }).click()
+  assert.equal(await page.locator('.ch-compare-tray').count(), 0)
   assert.equal(await page.locator('[data-conversation-scroll][data-ch-context-surface]').count(), 0)
   assert.notEqual(
     await page
