@@ -1,4 +1,4 @@
-import { build } from 'esbuild'
+import { build, transform } from 'esbuild'
 import postcss from 'postcss'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 
@@ -44,5 +44,9 @@ tree.walkRules((rule) => {
       : `:host ${selector}`,
   )
 })
-await writeFile('web/style.css', tree.toString())
+const minifiedCss = await transform(tree.toString(), {
+  loader: 'css',
+  minify: true,
+})
+await writeFile('web/style.css', minifiedCss.code)
 console.log(`Built native Web extension ${manifest.id}@${manifest.version}`)

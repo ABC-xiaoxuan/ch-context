@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -14,15 +15,15 @@ import { RichText } from './RichText.tsx'
 import { fmt, fmtTime } from '../client/format.ts'
 import { ROLE_COLOR } from './ActivityPanels.tsx'
 import type { Translate } from './i18n.ts'
-import { previewLine } from './format.ts'
 import {
-  findTextMatches,
-  layoutRecordTreemap,
-  parseRecordArguments,
-  type TextMatch,
-} from './treemap.ts'
+  buildRecordIndex,
+  filterIndexedRecords,
+  type IndexedHistoryItem,
+  type RecordFilter,
+} from './record-index.ts'
+import { findTextMatches, layoutRecordTreemap, type TextMatch } from './treemap.ts'
 
-export type RecordFilter = 'all' | 'messages' | 'tool' | 'event'
+export type { RecordFilter } from './record-index.ts'
 
 export function filterHistoryRecords(
   items: readonly HistoryItem[],
@@ -32,35 +33,13 @@ export function filterHistoryRecords(
   toolByRecord: ReadonlyMap<string, string>,
   t: Translate,
 ): HistoryItem[] {
-  const needle = query.trim().toLocaleLowerCase()
-  return items.filter((item) => {
-    if (errorsOnly && item.isError !== true) return false
-    if (
-      filter === 'messages'
-        ? item.kind !== 'user' && item.kind !== 'assistant'
-        : filter !== 'all' && item.kind !== filter
-    )
-      return false
-    if (!needle) return true
-    if (needle.startsWith('tool:'))
-      return toolByRecord.get(item.id)?.toLocaleLowerCase() === needle.slice(5)
-    return `${labelOf(item, toolByRecord.get(item.id), t)} ${item.text}`
-      .toLocaleLowerCase()
-      .includes(needle)
-  })
-}
-
-function labelOf(item: HistoryItem, tool: string | undefined, t: Translate): string {
-  if (item.kind === 'user' || item.kind === 'assistant')
-    return previewLine(item.text) || t(item.kind)
-  if (item.eventType === 'tool/call' && item.arguments) {
-    const parsed = parseRecordArguments(item.arguments)
-    const primary = parsed?.find(([key]) =>
-      ['command', 'cmd', 'path', 'file_path', 'filePath', 'pattern', 'description'].includes(key),
-    )
-    if (primary) return previewLine(primary[1], 90)
-  }
-  return tool ?? item.toolName ?? (item.eventType === 'tool/result' ? t('toolOutput') : item.title)
+  return filterIndexedRecords(
+    items,
+    buildRecordIndex(items, toolByRecord, t),
+    filter,
+    query,
+    errorsOnly,
+  )
 }
 
 function lineCountOf(text: string): number {
@@ -109,12 +88,14 @@ function InlineRecordDetail({
   item,
   title,
   pairedItem,
+  callArgs,
   onFocus,
   t,
 }: {
   item: HistoryItem
   title: string
   pairedItem?: HistoryItem
+  callArgs: Array<[string, string]> | null
   onFocus: (id: string) => void
   t: Translate
 }): ReactElement {
@@ -128,14 +109,14 @@ function InlineRecordDetail({
     () => (findOpen && findQuery.trim() ? findTextMatches(source, findQuery) : []),
     [findOpen, findQuery, source],
   )
-  const boundedIndex = matches.length > 0 ? ((findIndex % matches.length) + matches.length) % matches.length : 0
+  const boundedIndex =
+    matches.length > 0 ? ((findIndex % matches.length) + matches.length) % matches.length : 0
   const callRecord =
     item.eventType === 'tool/call'
       ? item
       : pairedItem?.eventType === 'tool/call'
         ? pairedItem
         : undefined
-  const callArgs = useMemo(() => parseRecordArguments(callRecord?.arguments), [callRecord?.arguments])
   const callStatus: 'err' | 'ok' | 'pending' | null =
     item.kind !== 'tool'
       ? null
@@ -144,7 +125,7 @@ function InlineRecordDetail({
         : item.isError === false || pairedItem?.isError === false
           ? 'ok'
           : 'pending'
-  const lineCount = lineCountOf(source)
+  const lineCount = useMemo(() => lineCountOf(source), [source])
   const bodyLabel =
     item.eventType === 'tool/result'
       ? t('resultOutput')
@@ -369,8 +350,80 @@ function InlineRecordDetail({
   )
 }
 
-export function RecordBrowser({
+const RecordRow = memo(function RecordRow({
+  item,
+  label,
+  tag,
+  isSelected,
+  paired,
+  callArgs,
+  onFocus,
+  onJumpRecord,
+  t,
+}: {
+  item: HistoryItem
+  label: string
+  tag?: string
+  isSelected: boolean
+  paired?: HistoryItem
+  callArgs: Array<[string, string]> | null
+  onFocus: (id: string) => void
+  onJumpRecord: (id: string) => void
+  t: Translate
+}): ReactElement {
+  return (
+    <div
+      className={`ch-br-elem ${isSelected ? 'is-selected' : ''} ${item.isError === true ? 'is-error-row' : ''}`}
+    >
+      <button
+        type="button"
+        className={`ch-record-item ch-record-${item.kind} ${isSelected ? 'is-selected' : ''} ${item.isError === true ? 'is-error-row' : ''}`}
+        aria-expanded={isSelected}
+        aria-pressed={isSelected}
+        title={label}
+        onClick={() => onFocus(item.id)}
+      >
+        <span className="ch-br-chev" aria-hidden="true">
+          {isSelected ? '▾' : '▸'}
+        </span>
+        {item.isError === true && <i className="ch-br-err-dot" aria-hidden="true" />}
+        {tag ? (
+          <span className="ch-br-tag">{tag}</span>
+        ) : (
+          <span className="ch-br-tag is-role">
+            <i style={{ background: ROLE_COLOR[item.kind] }} />
+            {t(item.kind)}
+          </span>
+        )}
+        <span className="ch-record-title">{label}</span>
+        <RecordBadges item={item} t={t} />
+        <span className="ch-record-time">
+          {item.time === undefined ? '' : fmtTime(item.time)}
+        </span>
+        <span className="ch-record-seq" title={`Seq ${item.seq}`}>
+          #{item.seq}
+        </span>
+      </button>
+      {isSelected && (
+        <InlineRecordDetail
+          key={item.id}
+          item={item}
+          title={label}
+          pairedItem={paired}
+          callArgs={callArgs}
+          onFocus={onJumpRecord}
+          t={t}
+        />
+      )}
+    </div>
+  )
+})
+
+export const RecordBrowser = memo(function RecordBrowser({
   items,
+  filteredRows,
+  recordIndex: providedIndex,
+  isFiltering,
   pairs,
   available,
   toolByRecord,
@@ -394,6 +447,9 @@ export function RecordBrowser({
   t,
 }: {
   items: readonly HistoryItem[]
+  filteredRows?: readonly HistoryItem[]
+  recordIndex?: ReadonlyMap<string, IndexedHistoryItem>
+  isFiltering?: boolean
   pairs: ReadonlyMap<string, string>
   available: boolean
   toolByRecord: ReadonlyMap<string, string>
@@ -423,6 +479,11 @@ export function RecordBrowser({
     () => new Set(['user', 'assistant', 'tool']),
   )
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
+  const fallbackIndex = useMemo(
+    () => (providedIndex ? null : buildRecordIndex(items, toolByRecord, t)),
+    [providedIndex, items, toolByRecord, t],
+  )
+  const recordIndex = providedIndex ?? fallbackIndex!
   const errorCount = useMemo(() => items.filter((item) => item.isError === true).length, [items])
   const counts = useMemo(() => {
     let user = 0
@@ -438,72 +499,63 @@ export function RecordBrowser({
     return { all: items.length, messages: user + assistant, user, assistant, tool, event }
   }, [items])
   const treemap = useMemo(() => (showMap ? layoutRecordTreemap(items) : null), [showMap, items])
-  const rows = useMemo(
-    () => filterHistoryRecords(items, filter, deferred, errorsOnly, toolByRecord, t),
-    [items, filter, deferred, errorsOnly, toolByRecord, t],
+  const fallbackRows = useMemo(
+    () =>
+      filteredRows
+        ? null
+        : filterIndexedRecords(items, recordIndex, filter, deferred, errorsOnly),
+    [filteredRows, items, recordIndex, filter, deferred, errorsOnly],
   )
+  const rows = filteredRows ?? fallbackRows!
+  const filteringPending = isFiltering ?? query !== deferred
+  const groupsByKind = useMemo(() => {
+    const groups: Record<HistoryItem['kind'], HistoryItem[]> = {
+      user: [],
+      assistant: [],
+      tool: [],
+      event: [],
+    }
+    for (const item of rows) groups[item.kind].push(item)
+    return groups
+  }, [rows])
   const selected =
     rows.find((item) => item.id === focus) ??
     rows.findLast((item) => item.kind === 'assistant' || item.kind === 'user') ??
     rows.at(-1)
   useEffect(() => {
-    if (query !== deferred || !selected) return
+    if (filteringPending || !selected) return
     if (selected.id !== focus) onFocus(selected.id)
     setExpanded((previous) =>
       previous.has(selected.kind) ? previous : new Set([...previous, selected.kind]),
     )
-  }, [selected?.id, focus, query, deferred, onFocus])
+  }, [selected?.id, focus, filteringPending, onFocus])
   const selectedIndex = rows.findIndex((item) => item.id === selected?.id)
   const renderRow = (item: HistoryItem): ReactElement => {
-    const tool = toolByRecord.get(item.id)
+    const indexed = recordIndex.get(item.id)
+    const tool = indexed?.tool ?? toolByRecord.get(item.id)
+    const label = indexed?.label ?? item.title
     const isSelected = selected?.id === item.id
     const tag = item.toolName ?? tool
     const paired = itemById.get(pairs.get(item.id) ?? '')
+    const callArgs =
+      item.eventType === 'tool/call'
+        ? (indexed?.parsedArgs ?? null)
+        : paired?.eventType === 'tool/call'
+          ? (recordIndex.get(paired.id)?.parsedArgs ?? null)
+          : null
     return (
-      <div
+      <RecordRow
         key={item.id}
-        className={`ch-br-elem ${isSelected ? 'is-selected' : ''} ${item.isError === true ? 'is-error-row' : ''}`}
-      >
-        <button
-          type="button"
-          className={`ch-record-item ch-record-${item.kind} ${isSelected ? 'is-selected' : ''} ${item.isError === true ? 'is-error-row' : ''}`}
-          aria-expanded={isSelected}
-          aria-pressed={isSelected}
-          title={labelOf(item, tool, t)}
-          onClick={() => onFocus(item.id)}
-        >
-          <span className="ch-br-chev" aria-hidden="true">
-            {isSelected ? '▾' : '▸'}
-          </span>
-          {item.isError === true && <i className="ch-br-err-dot" aria-hidden="true" />}
-          {tag ? (
-            <span className="ch-br-tag">{tag}</span>
-          ) : (
-            <span className="ch-br-tag is-role">
-              <i style={{ background: ROLE_COLOR[item.kind] }} />
-              {t(item.kind)}
-            </span>
-          )}
-          <span className="ch-record-title">{labelOf(item, tool, t)}</span>
-          <RecordBadges item={item} t={t} />
-          <span className="ch-record-time">
-            {item.time === undefined ? '' : fmtTime(item.time)}
-          </span>
-          <span className="ch-record-seq" title={`Seq ${item.seq}`}>
-            #{item.seq}
-          </span>
-        </button>
-        {isSelected && (
-          <InlineRecordDetail
-            key={item.id}
-            item={item}
-            title={labelOf(item, tool, t)}
-            pairedItem={paired}
-            onFocus={onJumpRecord}
-            t={t}
-          />
-        )}
-      </div>
+        item={item}
+        label={label}
+        tag={tag}
+        isSelected={isSelected}
+        paired={paired}
+        callArgs={callArgs}
+        onFocus={onFocus}
+        onJumpRecord={onJumpRecord}
+        t={t}
+      />
     )
   }
   const groupLabels = {
@@ -711,7 +763,7 @@ export function RecordBrowser({
           </button>
         </div>
       )}
-      <div className="ch-browser-records" aria-busy={loading || deferred !== query}>
+      <div className="ch-browser-records" aria-busy={loading || filteringPending}>
         {loading && items.length === 0 ? (
           <p className="ch-note">{t('historyLoading')}</p>
         ) : rows.length === 0 ? (
@@ -720,7 +772,7 @@ export function RecordBrowser({
           </p>
         ) : grouped ? (
           (['user', 'assistant', 'tool', 'event'] as const).map((kind) => {
-            const group = rows.filter((item) => item.kind === kind)
+            const group = groupsByKind[kind]
             if (
               (filter === 'messages' && kind !== 'user' && kind !== 'assistant') ||
               (filter !== 'messages' && filter !== 'all' && filter !== kind)
@@ -798,11 +850,11 @@ export function RecordBrowser({
           )}
           {hasMore && (
             <button type="button" className="ch-button" disabled={loading} onClick={older}>
-              {t(loading ? 'historyLoading' : 'older')}
+              {t('older')}
             </button>
           )}
         </div>
       </footer>
     </Card>
   )
-}
+})

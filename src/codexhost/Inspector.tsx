@@ -1,6 +1,14 @@
-import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
-import type { SessionRow } from './api.ts'
-import { pairedRecordIds, summarizeActivity } from './activity.ts'
+import {
+  useCallback,
+  useDeferredValue,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from 'react'
+import type { HistoryItem, SessionRow } from './api.ts'
+import { pairedRecordIds, summarizeActivity, type ActivitySummary } from './activity.ts'
 import { relatedSessions } from './relationships.ts'
 import { ActivityTimeline, SessionNetworkCard } from './ActivityPanels.tsx'
 import {
@@ -9,10 +17,13 @@ import {
   type FileFilter,
 } from './ActivityCards.tsx'
 import { ContextStatsCard } from './ContextStatsCard.tsx'
-import { filterHistoryRecords, RecordBrowser, type RecordFilter } from './RecordBrowser.tsx'
+import { RecordBrowser } from './RecordBrowser.tsx'
+import { buildRecordIndex, filterIndexedRecords, type RecordFilter } from './record-index.ts'
 import { ContextCard, PerformanceCard, UsageCard } from './components.tsx'
 import type { useHistory, useUsage } from './hooks.ts'
 import type { Translate } from './i18n.ts'
+
+const EMPTY_ITEMS: readonly HistoryItem[] = []
 
 function isEditableTarget(event: KeyboardEvent<HTMLDivElement>): boolean {
   const path = event.nativeEvent.composedPath?.() ?? [event.target]
@@ -28,6 +39,7 @@ function isEditableTarget(event: KeyboardEvent<HTMLDivElement>): boolean {
 export function Inspector({
   usage,
   history,
+  summary: providedSummary,
   rows,
   selected,
   currentTitle,
@@ -38,6 +50,7 @@ export function Inspector({
 }: {
   usage: ReturnType<typeof useUsage>
   history: ReturnType<typeof useHistory>
+  summary?: ActivitySummary | null
   rows: readonly SessionRow[]
   selected: string
   currentTitle: string
@@ -54,18 +67,33 @@ export function Inspector({
   const [errorsOnly, setErrorsOnly] = useState(false)
   const [fileFilter, setFileFilter] = useState<FileFilter>('all')
   const [cmdProgram, setCmdProgram] = useState<string | null>(null)
-  const summary = useMemo(
-    () => (history.page ? summarizeActivity(history.page.items) : null),
-    [history.page],
+  const deferredQuery = useDeferredValue(query)
+  const fallbackSummary = useMemo(
+    () =>
+      providedSummary !== undefined
+        ? providedSummary
+        : history.page
+          ? summarizeActivity(history.page.items)
+          : null,
+    [providedSummary, history.page],
   )
+  const summary = providedSummary !== undefined ? providedSummary : fallbackSummary
   const related = useMemo(() => relatedSessions(rows, selected), [rows, selected])
-  const items = history.page?.items ?? []
+  const items = history.page?.items ?? EMPTY_ITEMS
   const pairs = useMemo(() => pairedRecordIds(items), [items])
   const toolByRecord = useMemo(() => {
     const map = new Map<string, string>()
     for (const tool of summary?.tools ?? []) for (const id of tool.recordIds) map.set(id, tool.name)
     return map
   }, [summary])
+  const recordIndex = useMemo(
+    () => buildRecordIndex(items, toolByRecord, t),
+    [items, toolByRecord, t],
+  )
+  const filteredItems = useMemo(
+    () => filterIndexedRecords(items, recordIndex, filter, deferredQuery, errorsOnly),
+    [items, recordIndex, filter, deferredQuery, errorsOnly],
+  )
   const reveal = useCallback((selector: string): void => {
     requestAnimationFrame(() =>
       root.current?.querySelector(selector)?.scrollIntoView({ block: 'nearest' }),
@@ -81,10 +109,52 @@ export function Inspector({
     },
     [reveal],
   )
-  const filteredItems = useMemo(
-    () => filterHistoryRecords(items, filter, query, errorsOnly, toolByRecord, t),
-    [items, filter, query, errorsOnly, toolByRecord, t],
+  const selectRecord = useCallback((id: string) => focusRecord(id, true), [focusRecord])
+  const focusInline = useCallback((id: string) => focusRecord(id, false), [focusRecord])
+  const jumpTimeline = useCallback(() => reveal('.ch-activity-timeline'), [reveal])
+  const jumpBrowser = useCallback(
+    (nextFilter: RecordFilter) => {
+      setFilter(nextFilter)
+      setQuery('')
+      setErrorsOnly(false)
+      reveal('.ch-browser-card')
+    },
+    [reveal],
   )
+  const jumpTool = useCallback(
+    (toolName: string) => {
+      setFilter('tool')
+      setQuery(`tool:${toolName}`)
+      setErrorsOnly(false)
+      reveal('.ch-browser-card')
+    },
+    [reveal],
+  )
+  const jumpErrors = useCallback(() => {
+    setFilter('all')
+    setQuery('')
+    setErrorsOnly(true)
+    reveal('.ch-browser-card')
+  }, [reveal])
+  const jumpFiles = useCallback(
+    (nextFileFilter: FileFilter = 'all') => {
+      setFileFilter(nextFileFilter)
+      reveal('.ch-file-card')
+    },
+    [reveal],
+  )
+  const jumpCommands = useCallback(() => {
+    setCmdProgram(null)
+    reveal('.ch-command-card')
+  }, [reveal])
+  const jumpProgram = useCallback(
+    (program: string) => {
+      setCmdProgram(program)
+      reveal('.ch-command-card')
+    },
+    [reveal],
+  )
+  const jumpNetwork = useCallback(() => reveal('.ch-family-card'), [reveal])
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const editable = isEditableTarget(event)
@@ -121,38 +191,14 @@ export function Inspector({
         summary={summary}
         items={items}
         related={related}
-        onJumpTimeline={() => reveal('.ch-activity-timeline')}
-        onJumpBrowser={(nextFilter) => {
-          setFilter(nextFilter)
-          setQuery('')
-          setErrorsOnly(false)
-          reveal('.ch-browser-card')
-        }}
-        onJumpTool={(toolName) => {
-          setFilter('tool')
-          setQuery(`tool:${toolName}`)
-          setErrorsOnly(false)
-          reveal('.ch-browser-card')
-        }}
-        onJumpErrors={() => {
-          setFilter('all')
-          setQuery('')
-          setErrorsOnly(true)
-          reveal('.ch-browser-card')
-        }}
-        onJumpFiles={(nextFileFilter = 'all') => {
-          setFileFilter(nextFileFilter)
-          reveal('.ch-file-card')
-        }}
-        onJumpCommands={() => {
-          setCmdProgram(null)
-          reveal('.ch-command-card')
-        }}
-        onJumpProgram={(program) => {
-          setCmdProgram(program)
-          reveal('.ch-command-card')
-        }}
-        onJumpNetwork={() => reveal('.ch-family-card')}
+        onJumpTimeline={jumpTimeline}
+        onJumpBrowser={jumpBrowser}
+        onJumpTool={jumpTool}
+        onJumpErrors={jumpErrors}
+        onJumpFiles={jumpFiles}
+        onJumpCommands={jumpCommands}
+        onJumpProgram={jumpProgram}
+        onJumpNetwork={jumpNetwork}
         t={t}
       />
 
@@ -161,7 +207,7 @@ export function Inspector({
         <PerformanceCard
           usage={usage.usage}
           items={items}
-          onSelectRecord={(id) => focusRecord(id, true)}
+          onSelectRecord={selectRecord}
           t={t}
         />
       </div>
@@ -180,18 +226,21 @@ export function Inspector({
             available={history.page !== null}
             loading={history.loading}
             focus={focus}
-            onFocus={(id) => focusRecord(id, false)}
+            onFocus={focusInline}
             t={t}
           />
         </div>
         <RecordBrowser
           items={items}
+          filteredRows={filteredItems}
+          recordIndex={recordIndex}
+          isFiltering={query !== deferredQuery}
           pairs={pairs}
           available={history.page !== null}
           toolByRecord={toolByRecord}
           focus={focus}
           onFocus={setFocus}
-          onJumpRecord={(id) => focusRecord(id, false)}
+          onJumpRecord={focusInline}
           filter={filter}
           onFilter={setFilter}
           query={query}
@@ -215,7 +264,7 @@ export function Inspector({
         items={items}
         filter={fileFilter}
         onFilter={setFileFilter}
-        onFocus={focusRecord}
+        onFocus={selectRecord}
         t={t}
       />
 
@@ -224,7 +273,7 @@ export function Inspector({
         items={items}
         selectedProgram={cmdProgram}
         onSelectProgram={setCmdProgram}
-        onFocus={focusRecord}
+        onFocus={selectRecord}
         t={t}
       />
 

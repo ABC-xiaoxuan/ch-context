@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { CodexHostClient, type HistoryPage, type SessionPage, type SessionRow } from './api.ts'
+import { BoundedLruCache, createBatchQueue, SessionUsageCache } from './cache.ts'
 import { appendSample, isThreadId, recordOf, usageOf, type Sample, type Usage } from './model.ts'
 import { observeUsageChanges } from './realtime.ts'
 
@@ -37,6 +38,10 @@ export interface ViewProps {
 const client = new CodexHostClient()
 const absentSubscribe = (): (() => void) => () => undefined
 
+function isDocumentHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+}
+
 export function useLocale(ctx: ViewContext): string {
   const subscribe = useCallback(
     (listener: () => void) => ctx.locale.subscribe?.(listener) ?? absentSubscribe(),
@@ -65,20 +70,36 @@ export function useSessions(
   cursor: string | null,
   revision: number,
 ): { page: SessionPage | null; loading: boolean; error: string | null } {
+  const cacheRef = useRef<{ revision: number; pages: BoundedLruCache<string, SessionPage> } | null>(
+    null,
+  )
+  if (!cacheRef.current || cacheRef.current.revision !== revision) {
+    cacheRef.current = { revision, pages: new BoundedLruCache(10) }
+  }
+  const cacheKey = cursor ?? ''
+  const cachedPage = cacheRef.current.pages.get(cacheKey) ?? null
   const [state, setState] = useState<{
     key: string
     page: SessionPage | null
     loading: boolean
     error: string | null
   }>({ key: '', page: null, loading: true, error: null })
-  const key = `${cursor ?? ''}:${revision}`
+  const key = `${cacheKey}:${revision}`
   useEffect(() => {
+    const cached = cacheRef.current?.pages.get(cacheKey)
+    if (cached) {
+      setState({ key, page: cached, loading: false, error: null })
+      return
+    }
     const controller = new AbortController()
     setState({ key, page: null, loading: true, error: null })
     void client
       .listSessions(cursor, controller.signal)
       .then((page) => {
-        if (!controller.signal.aborted) setState({ key, page, loading: false, error: null })
+        if (!controller.signal.aborted) {
+          cacheRef.current?.pages.set(cacheKey, page)
+          setState({ key, page, loading: false, error: null })
+        }
       })
       .catch((error) => {
         if (!controller.signal.aborted)
@@ -90,8 +111,10 @@ export function useSessions(
           })
       })
     return () => controller.abort()
-  }, [cursor, key])
-  return state.key === key ? state : { page: null, loading: true, error: null }
+  }, [cursor, cacheKey, key])
+  if (state.key === key) return state
+  if (cachedPage) return { page: cachedPage, loading: false, error: null }
+  return { page: null, loading: true, error: null }
 }
 
 interface UsageState {
@@ -109,6 +132,7 @@ export function useUsage(
   id: string | undefined,
   projection: unknown,
   revision: number,
+  enabled = true,
 ): UsageState {
   const source = useRef({ id, projection, generation: 0 })
   if (source.current.id !== id || source.current.projection !== projection) {
@@ -117,7 +141,7 @@ export function useUsage(
   const [state, setState] = useState<UsageState>({
     id,
     usage: null,
-    loading: Boolean(id),
+    loading: Boolean(id && enabled),
     error: null,
     connected: true,
     samples: [],
@@ -125,7 +149,7 @@ export function useUsage(
     snapshotSequence: 0,
   })
   useEffect(() => {
-    if (projection === undefined || !id) return
+    if (!enabled || projection === undefined || !id) return
     const usage = usageOf(projection)
     const time = Date.now()
     setState((previous) => ({
@@ -138,12 +162,15 @@ export function useUsage(
       updatedAt: time,
       snapshotSequence: (previous.id === id ? previous.snapshotSequence : 0) + 1,
     }))
-  }, [id, projection])
+  }, [id, projection, enabled])
   useEffect(() => {
+    if (!enabled || !id) return
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     let running = false
     let pending = false
+    let sawDisconnect = false
+    let deferredWhileHidden = false
     const load = async (): Promise<void> => {
       if (!id || controller.signal.aborted) return
       if (running) {
@@ -201,6 +228,26 @@ export function useUsage(
         }
       }
     }
+    const scheduleLoad = (): void => {
+      if (isDocumentHidden()) {
+        deferredWhileHidden = true
+        return
+      }
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = undefined
+        void load()
+      }, 150)
+    }
+    const onVisibilityChange = (): void => {
+      if (!isDocumentHidden() && deferredWhileHidden && !controller.signal.aborted) {
+        deferredWhileHidden = false
+        void load()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    }
     if (projection === undefined || revision > 0) {
       setState((previous) =>
         previous.id === id
@@ -222,31 +269,34 @@ export function useUsage(
       id && projection === undefined
         ? observeUsageChanges(
             id,
-            () => {
-              if (timer !== undefined) clearTimeout(timer)
-              timer = setTimeout(() => {
-                void load()
-              }, 150)
-            },
+            scheduleLoad,
             (connected) => {
               if (!controller.signal.aborted)
                 setState((previous) => (previous.id === id ? { ...previous, connected } : previous))
-              if (connected) void load()
+              if (!connected) {
+                sawDisconnect = true
+              } else if (sawDisconnect) {
+                sawDisconnect = false
+                scheduleLoad()
+              }
             },
           )
         : undefined
     return () => {
       controller.abort()
       stop?.()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [id, projection === undefined, revision])
+  }, [id, projection === undefined, revision, enabled])
   return state.id === id
     ? state
     : {
         id,
         usage: null,
-        loading: Boolean(id),
+        loading: Boolean(id && enabled),
         error: null,
         connected: true,
         samples: [],
@@ -259,6 +309,7 @@ export function useHistory(
   id: string | undefined,
   revision: number,
   usageSequence: number | null = null,
+  enabled = true,
 ): {
   page: HistoryPage | null
   loading: boolean
@@ -289,24 +340,87 @@ export function useHistory(
     loading: boolean
     error: string | null
   }>({ page: null, loading: false, error: null })
+  const [liveCatchup, setLiveCatchup] = useState(0)
+  const latestLiveRef = useRef<number | null>(liveRevision)
+  latestLiveRef.current = liveRevision
+  const explicitInFlightRef = useRef(false)
+  const settledLatestRef = useRef<{ id: string; revision: number; throughSeq: number } | null>(null)
   useEffect(() => setWindow(null), [id])
   useEffect(() => {
-    if (!id) return
+    if (!enabled || !id) {
+      explicitInFlightRef.current = false
+      settledLatestRef.current = null
+      return
+    }
     const controller = new AbortController()
+    const liveAtStart = latestLiveRef.current
+    explicitInFlightRef.current = true
+    settledLatestRef.current = null
     setState((previous) => ({
       id,
       page: previous.id === id ? previous.page : null,
       loading: true,
       error: null,
     }))
-    const load = (): void => {
+    void client
+      .history(id, controller.signal, before, through)
+      .then((page) => {
+        if (controller.signal.aborted) return
+        explicitInFlightRef.current = false
+        if (before === undefined) {
+          settledLatestRef.current = { id, revision, throughSeq: page.throughSeq }
+        }
+        setState({ id, page, loading: false, error: null })
+        if (
+          before === undefined &&
+          liveAtStart !== null &&
+          latestLiveRef.current !== liveAtStart
+        ) {
+          setLiveCatchup((value) => value + 1)
+        }
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        explicitInFlightRef.current = false
+        settledLatestRef.current = null
+        setState((previous) => ({
+          id,
+          page: previous.id === id ? previous.page : null,
+          loading: false,
+          error: String(error instanceof Error ? error.message : error),
+        }))
+      })
+    return () => {
+      controller.abort()
+      explicitInFlightRef.current = false
+    }
+  }, [id, before, through, revision, enabled])
+  useEffect(() => {
+    if (!enabled || !id || before !== undefined || liveRevision === null) return
+    if (explicitInFlightRef.current) return
+    const settled = settledLatestRef.current
+    if (!settled || settled.id !== id || settled.revision !== revision) return
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let waitingVisible = false
+    const runLive = (): void => {
+      if (controller.signal.aborted || explicitInFlightRef.current) return
+      const currentSettled = settledLatestRef.current
+      if (!currentSettled || currentSettled.id !== id || currentSettled.revision !== revision)
+        return
+      if (isDocumentHidden()) {
+        waitingVisible = true
+        return
+      }
       void client
-        .history(id, controller.signal, before, through)
+        .historySince(id, controller.signal, currentSettled.throughSeq)
         .then((page) => {
-          if (!controller.signal.aborted) setState({ id, page, loading: false, error: null })
+          if (controller.signal.aborted || explicitInFlightRef.current || page === null) return
+          settledLatestRef.current = { id, revision, throughSeq: page.throughSeq }
+          setState({ id, page, loading: false, error: null })
         })
         .catch((error) => {
-          if (!controller.signal.aborted)
+          if (!controller.signal.aborted && !explicitInFlightRef.current)
             setState((previous) => ({
               id,
               page: previous.id === id ? previous.page : null,
@@ -315,30 +429,43 @@ export function useHistory(
             }))
         })
     }
-    const timer =
-      liveRevision !== null && state.id === id && state.page !== null
-        ? setTimeout(load, 350)
-        : undefined
-    if (timer === undefined) load()
+    const onVisibilityChange = (): void => {
+      if (!isDocumentHidden() && waitingVisible && !controller.signal.aborted) {
+        waitingVisible = false
+        runLive()
+      }
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    }
+    timer = setTimeout(runLive, 700)
     return () => {
       controller.abort()
       if (timer !== undefined) clearTimeout(timer)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+      }
     }
-  }, [id, before, through, revision, liveRevision])
-  const current = state.id === id ? state : { page: null, loading: Boolean(id), error: null }
+  }, [id, before, revision, liveRevision, liveCatchup, enabled])
+  const current =
+    state.id === id ? state : { page: null, loading: Boolean(id && enabled), error: null }
+  const latest = useCallback(() => setWindow(null), [])
+  const beforeSeq = current.page?.beforeSeq
+  const throughSeq = current.page?.throughSeq
+  const older = useCallback(() => {
+    if (id && beforeSeq !== undefined && throughSeq !== undefined)
+      setWindow({
+        id,
+        generation: scope.current.generation,
+        before: beforeSeq,
+        through: throughSeq,
+      })
+  }, [id, beforeSeq, throughSeq])
   return {
     ...current,
-    latest: () => setWindow(null),
+    latest,
     isOlder: before !== undefined,
-    older: () => {
-      if (id && current.page?.beforeSeq !== undefined)
-        setWindow({
-          id,
-          generation: scope.current.generation,
-          before: current.page.beforeSeq,
-          through: current.page.throughSeq,
-        })
-    },
+    older,
   }
 }
 
@@ -349,46 +476,94 @@ export function useOverviewUsage(
   enabled: boolean,
   revision: number,
 ): ReadonlyMap<string, Usage | null> {
+  const cacheRef = useRef<SessionUsageCache | null>(null)
+  if (!cacheRef.current) cacheRef.current = new SessionUsageCache(200, 60_000)
   const [state, setState] = useState<{
     key: string
     entries: Map<string, Usage | null>
   }>(() => ({ key: '', entries: new Map() }))
-  const ids = rows
-    .map((row) => row.id)
-    .filter(isThreadId)
-    .slice(0, 50)
-  const key = enabled && ids.length > 0 ? `${revision}:${ids.join(',')}` : ''
+  const targets = useMemo(
+    () =>
+      rows
+        .filter((row) => isThreadId(row.id))
+        .slice(0, 50)
+        .map((row) => ({ id: row.id, stamp: row.updatedAt })),
+    [rows],
+  )
+  const key =
+    enabled && targets.length > 0
+      ? `${revision}:${targets.map((target) => `${target.id}@${target.stamp ?? ''}`).join(',')}`
+      : ''
+  const cacheSnapshot = useMemo(() => {
+    if (!key)
+      return {
+        initial: EMPTY_USAGE_MAP,
+        missing: [] as Array<{ id: string; stamp: number | undefined }>,
+      }
+    const cache = cacheRef.current!
+    const now = Date.now()
+    const initial = new Map<string, Usage | null>()
+    const missing: Array<{ id: string; stamp: number | undefined }> = []
+    for (const target of targets) {
+      const cached = cache.read(target.id, target.stamp, revision, now)
+      if (cached.hit) initial.set(target.id, cached.usage)
+      else missing.push(target)
+    }
+    return { initial, missing }
+  }, [key, revision, targets])
   useEffect(() => {
     if (!key) {
-      setState({ key: '', entries: new Map() })
+      setState((previous) => (previous.key ? { key: '', entries: new Map() } : previous))
       return
     }
+    if (cacheSnapshot.missing.length === 0) return
+    const cache = cacheRef.current!
+    const missing = cacheSnapshot.missing
+    setState({ key, entries: new Map(cacheSnapshot.initial) })
+
     const controller = new AbortController()
-    setState({ key, entries: new Map() })
-    const queue = [...ids]
-    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
-      while (!controller.signal.aborted && queue.length > 0) {
-        const id = queue.shift()
-        if (!id) break
+    const batch = createBatchQueue<string, Usage | null>(
+      (chunk) => {
+        setState((previous) => {
+          if (controller.signal.aborted || previous.key !== key) return previous
+          const next = new Map(previous.entries)
+          for (const [entryId, entryUsage] of chunk) next.set(entryId, entryUsage)
+          return { key, entries: next }
+        })
+      },
+      120,
+      8,
+    )
+    let cursor = 0
+    const workers = Array.from({ length: Math.min(4, missing.length) }, async () => {
+      while (!controller.signal.aborted) {
+        const index = cursor++
+        if (index >= missing.length) break
+        const target = missing[index]
         let nextUsage: Usage | null = null
+        let resolved = false
         try {
-          const snapshot = await client.inspectUsage(id, controller.signal)
+          const snapshot = await client.inspectUsage(target.id, controller.signal)
           if (controller.signal.aborted) return
           nextUsage = usageOf(snapshot)
+          resolved = true
         } catch {
           if (controller.signal.aborted) return
           nextUsage = null
         }
-        setState((previous) => {
-          if (controller.signal.aborted || previous.key !== key) return previous
-          const next = new Map(previous.entries)
-          next.set(id, nextUsage)
-          return { key, entries: next }
-        })
+        if (resolved) cache.write(target.id, target.stamp, revision, nextUsage)
+        batch.push(target.id, nextUsage)
       }
     })
-    void Promise.all(workers)
-    return () => controller.abort()
-  }, [key])
-  return key && state.key === key ? state.entries : EMPTY_USAGE_MAP
+    void Promise.all(workers).then(() => {
+      if (!controller.signal.aborted) batch.flushNow()
+    })
+    return () => {
+      controller.abort()
+      batch.cancel()
+    }
+  }, [key, revision, cacheSnapshot])
+  if (!key) return EMPTY_USAGE_MAP
+  if (cacheSnapshot.missing.length === 0) return cacheSnapshot.initial
+  return state.key === key ? state.entries : cacheSnapshot.initial
 }

@@ -1,4 +1,12 @@
-import { useState, type ReactElement, type ReactNode } from 'react'
+import {
+  memo,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 import { Donut } from '../client/components/donut.tsx'
 import { fmt, fmtDuration, fmtTime } from '../client/format.ts'
 import type { HistoryItem } from './api.ts'
@@ -75,7 +83,7 @@ export function Card({
   )
 }
 
-function Sparkline({
+const Sparkline = memo(function Sparkline({
   samples,
   tone,
   t,
@@ -87,26 +95,29 @@ function Sparkline({
   const first = samples[0]
   const last = samples.at(-1)
   const delta = first && last && samples.length > 1 ? last.percent - first.percent : null
-  const minP = samples.length
-    ? Math.max(0, Math.min(...samples.map((sample) => Math.min(100, sample.percent))) - 6)
-    : 0
-  const maxP = samples.length
-    ? Math.min(100, Math.max(...samples.map((sample) => Math.min(100, sample.percent))) + 6)
-    : 100
-  const spanP = Math.max(12, maxP - minP)
-  const points = samples.map((sample, index) => {
-    const x = samples.length === 1 ? 210 : 12 + (index / (samples.length - 1)) * 396
-    const clamped = Math.min(100, Math.max(0, sample.percent))
-    const y = 38 - ((clamped - minP) / spanP) * 30
-    return { x, y, sample }
-  })
-  const linePath = points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
-    .join(' ')
-  const areaPath =
-    points.length > 1
-      ? `${linePath} L${points[points.length - 1].x.toFixed(1)},43 L${points[0].x.toFixed(1)},43 Z`
-      : ''
+  const { points, linePath, areaPath } = useMemo(() => {
+    const minP = samples.length
+      ? Math.max(0, Math.min(...samples.map((sample) => Math.min(100, sample.percent))) - 6)
+      : 0
+    const maxP = samples.length
+      ? Math.min(100, Math.max(...samples.map((sample) => Math.min(100, sample.percent))) + 6)
+      : 100
+    const spanP = Math.max(12, maxP - minP)
+    const nextPoints = samples.map((sample, index) => {
+      const x = samples.length === 1 ? 210 : 12 + (index / (samples.length - 1)) * 396
+      const clamped = Math.min(100, Math.max(0, sample.percent))
+      const y = 38 - ((clamped - minP) / spanP) * 30
+      return { x, y, sample }
+    })
+    const nextLine = nextPoints
+      .map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+      .join(' ')
+    const nextArea =
+      nextPoints.length > 1
+        ? `${nextLine} L${nextPoints[nextPoints.length - 1].x.toFixed(1)},43 L${nextPoints[0].x.toFixed(1)},43 Z`
+        : ''
+    return { points: nextPoints, linePath: nextLine, areaPath: nextArea }
+  }, [samples])
   return (
     <div className={`ch-spark-box is-${tone}`} title={t('timelineNote')}>
       <div className="ch-spark-head">
@@ -140,9 +151,9 @@ function Sparkline({
       </svg>
     </div>
   )
-}
+})
 
-export function ContextCard({
+export const ContextCard = memo(function ContextCard({
   usage,
   samples,
   harness,
@@ -227,7 +238,7 @@ export function ContextCard({
       <Sparkline samples={samples} tone={tone} t={t} />
     </Card>
   )
-}
+})
 
 const PART_COLORS = {
   input: 'var(--ch-blue)',
@@ -237,7 +248,7 @@ const PART_COLORS = {
   output: 'var(--ch-purple)',
 }
 
-export function UsageCard({ usage, t }: { usage: Usage | null; t: Translate }): ReactElement {
+export const UsageCard = memo(function UsageCard({ usage, t }: { usage: Usage | null; t: Translate }): ReactElement {
   const [hover, setHover] = useState<string | null>(null)
   const parts = tokenParts(usage)
   const sum = parts.reduce((total, part) => total + part.value, 0)
@@ -342,7 +353,7 @@ export function UsageCard({ usage, t }: { usage: Usage | null; t: Translate }): 
       {lowerBound && <p className="ch-note">{t('partialPrice')}</p>}
     </Card>
   )
-}
+})
 
 function CacheBar({
   label,
@@ -371,7 +382,7 @@ const STRIP_COLOR = {
   event: 'var(--ch-purple)',
 }
 
-export function PerformanceCard({
+export const PerformanceCard = memo(function PerformanceCard({
   usage,
   items,
   onSelectRecord,
@@ -382,9 +393,63 @@ export function PerformanceCard({
   onSelectRecord: (id: string) => void
   t: Translate
 }): ReactElement {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null)
   const tps = usage?.outputTokensPerSecond ?? usage?.sessionOutputTokensPerSecond
   const tpsLabel = usage?.outputTokensPerSecond !== undefined ? t('tps') : t('avgTps')
   const midIndex = Math.floor(items.length / 2)
+  const stripRects = useMemo(() => {
+    const count = items.length
+    if (count === 0) return null
+    const step = 600 / count
+    const gap = count > 60 ? 0 : Math.min(1.5, step * 0.14)
+    const width = Math.max(0.6, step - gap)
+    return items.map((item, index) => (
+      <rect
+        key={item.id}
+        x={index * step}
+        y={0}
+        width={width}
+        height={11}
+        fill={item.isError === true ? 'var(--ch-danger)' : STRIP_COLOR[item.kind]}
+      />
+    ))
+  }, [items])
+  const indexAt = (event: MouseEvent<SVGSVGElement>): number | null => {
+    if (items.length === 0) return null
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (bounds.width <= 0) return null
+    const ratio = (event.clientX - bounds.left) / bounds.width
+    return Math.min(items.length - 1, Math.max(0, Math.floor(ratio * items.length)))
+  }
+  const rawActiveIdx = hoverIdx ?? focusedIdx
+  const activeIdx =
+    rawActiveIdx !== null && rawActiveIdx >= 0 && rawActiveIdx < items.length ? rawActiveIdx : null
+  const activeItem = activeIdx !== null ? items[activeIdx] : undefined
+  const activeLabel = activeItem
+    ? `#${activeItem.seq} · ${activeItem.toolName ?? t(activeItem.kind)}`
+    : undefined
+  const handleStripKeyDown = (event: KeyboardEvent<SVGSVGElement>): void => {
+    if (items.length === 0) return
+    const base =
+      focusedIdx !== null && focusedIdx < items.length ? focusedIdx : items.length - 1
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setFocusedIdx(Math.max(0, base - 1))
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      setFocusedIdx(Math.min(items.length - 1, base + 1))
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      setFocusedIdx(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      setFocusedIdx(items.length - 1)
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      if (items[base]) onSelectRecord(items[base].id)
+    }
+  }
   return (
     <Card
       title={t('performance')}
@@ -415,30 +480,58 @@ export function PerformanceCard({
         <div className="ch-tstrip-head">
           <span>{t('windowActivityStrip')}</span>
           <span>
-            {items.length > 0 ? `#${items[0].seq} → #${items.at(-1)!.seq}` : t('unavailable')}
+            {activeLabel
+              ? activeLabel
+              : items.length > 0
+                ? `#${items[0].seq} → #${items.at(-1)!.seq}`
+                : t('unavailable')}
           </span>
         </div>
-        <div
-          className={`ch-tstrip-bar ${items.length > 60 ? 'is-dense' : ''}`}
-          role="group"
-          aria-label={t('windowActivityStrip')}
-        >
+        <div className={`ch-tstrip-bar ${items.length > 60 ? 'is-dense' : ''}`}>
           {items.length === 0 ? (
             <div className="ch-tstrip-empty" />
           ) : (
-            items.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className="ch-tstrip-seg"
-                style={{
-                  background: item.isError === true ? 'var(--ch-danger)' : STRIP_COLOR[item.kind],
-                }}
-                title={`#${item.seq} · ${item.toolName ?? t(item.kind)}`}
-                aria-label={`#${item.seq} ${item.toolName ?? t(item.kind)}`}
-                onClick={() => onSelectRecord(item.id)}
-              />
-            ))
+            <svg
+              className="ch-tstrip-svg"
+              viewBox="0 0 600 11"
+              preserveAspectRatio="none"
+              tabIndex={0}
+              role="slider"
+              aria-label={t('windowActivityStrip')}
+              aria-valuemin={1}
+              aria-valuemax={items.length}
+              aria-valuenow={(activeIdx ?? items.length - 1) + 1}
+              aria-valuetext={activeLabel}
+              onClick={(event) => {
+                const idx = indexAt(event)
+                if (idx !== null && items[idx]) onSelectRecord(items[idx].id)
+              }}
+              onMouseMove={(event) => {
+                const idx = indexAt(event)
+                setHoverIdx((prev) => (prev === idx ? prev : idx))
+              }}
+              onMouseLeave={() => setHoverIdx(null)}
+              onFocus={() =>
+                setFocusedIdx((prev) =>
+                  prev !== null && prev < items.length ? prev : items.length - 1,
+                )
+              }
+              onBlur={() => setFocusedIdx(null)}
+              onKeyDown={handleStripKeyDown}
+            >
+              {activeLabel && <title>{activeLabel}</title>}
+              {stripRects}
+              {activeItem && activeIdx !== null && (
+                <rect
+                  x={(activeIdx / items.length) * 600}
+                  y={0}
+                  width={Math.max(2, 600 / items.length)}
+                  height={11}
+                  fill="var(--ch-ink)"
+                  opacity={0.28}
+                />
+              )}
+            </svg>
           )}
         </div>
         {items.length > 0 && (
@@ -451,7 +544,7 @@ export function PerformanceCard({
       </div>
     </Card>
   )
-}
+})
 
 export function RecordBadges({
   item,

@@ -48,17 +48,16 @@ interface LaidRect<T> {
   h: number
 }
 
-function packRects<T>(
-  entries: readonly WeightedRect<T>[],
+function packSortedRects<T>(
+  sorted: readonly WeightedRect<T>[],
+  total: number,
   x: number,
   y: number,
   w: number,
   h: number,
 ): LaidRect<T>[] {
-  const total = entries.reduce((sum, entry) => sum + entry.weight, 0)
-  if (entries.length === 0 || total <= 0 || w <= 0 || h <= 0) return []
-  if (entries.length === 1) return [{ item: entries[0].item, x, y, w, h }]
-  const sorted = [...entries].sort((a, b) => b.weight - a.weight)
+  if (sorted.length === 0 || total <= 0 || w <= 0 || h <= 0) return []
+  if (sorted.length === 1) return [{ item: sorted[0].item, x, y, w, h }]
   let acc = 0
   let split = 1
   const half = total / 2
@@ -73,15 +72,29 @@ function packRects<T>(
   if (w >= h) {
     const w1 = w * ratio
     return [
-      ...packRects(first, x, y, w1, h),
-      ...packRects(rest, x + w1, y, w - w1, h),
+      ...packSortedRects(first, acc, x, y, w1, h),
+      ...packSortedRects(rest, total - acc, x + w1, y, w - w1, h),
     ]
   }
   const h1 = h * ratio
   return [
-    ...packRects(first, x, y, w, h1),
-    ...packRects(rest, x, y + h1, w, h - h1),
+    ...packSortedRects(first, acc, x, y, w, h1),
+    ...packSortedRects(rest, total - acc, x, y + h1, w, h - h1),
   ]
+}
+
+function packRects<T>(
+  entries: readonly WeightedRect<T>[],
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): LaidRect<T>[] {
+  if (entries.length === 0 || w <= 0 || h <= 0) return []
+  const total = entries.reduce((sum, entry) => sum + entry.weight, 0)
+  if (total <= 0) return []
+  const sorted = [...entries].sort((a, b) => b.weight - a.weight)
+  return packSortedRects(sorted, total, x, y, w, h)
 }
 
 export function layoutRecordTreemap(items: readonly HistoryItem[]): RecordTreemap {
@@ -140,6 +153,18 @@ export function layoutRecordTreemap(items: readonly HistoryItem[]): RecordTreema
 export function findTextMatches(text: string, query: string, limit = 500): TextMatch[] {
   const needle = query.trim().toLocaleLowerCase()
   if (!needle || !text) return []
+  const directFolded = text.toLocaleLowerCase()
+  if (directFolded.length === text.length) {
+    const matches: TextMatch[] = []
+    let offset = 0
+    while (matches.length < limit) {
+      const found = directFolded.indexOf(needle, offset)
+      if (found < 0) break
+      matches.push({ start: found, end: found + needle.length })
+      offset = found + Math.max(1, needle.length)
+    }
+    return matches
+  }
   let folded = ''
   const origStarts: number[] = []
   const origEnds: number[] = []

@@ -1,6 +1,11 @@
-import { Fragment, useMemo, useState, type ReactElement } from 'react'
+import { Fragment, memo, useCallback, useMemo, useState, type ReactElement } from 'react'
 import { fmtTime } from '../client/format.ts'
-import { commandProgram, type ActivitySummary } from './activity.ts'
+import {
+  commandProgram,
+  type ActivitySummary,
+  type CommandActivity,
+  type FileActivity,
+} from './activity.ts'
 import type { HistoryItem } from './api.ts'
 import type { Translate } from './i18n.ts'
 import { Card } from './components.tsx'
@@ -15,6 +20,10 @@ const PROG_COLORS = [
 ]
 
 export type FileFilter = 'all' | 'reads' | 'writes' | 'searches'
+
+const EMPTY_FILES: readonly FileActivity[] = []
+const EMPTY_COMMANDS: readonly CommandActivity[] = []
+
 function fileExtension(path: string): { label: string; tone: string } {
   const base = path.split(/[\\/]/).at(-1) ?? path
   const dot = base.lastIndexOf('.')
@@ -77,7 +86,110 @@ function renderShellTokens(command: string): ReactElement {
   )
 }
 
-export function FileActivityCard({
+interface EnrichedFile {
+  file: FileActivity
+  dir: string
+  base: string
+  pathLower: string
+  ext: { label: string; tone: string }
+  latestTime: number
+  totalOps: number
+}
+
+const FileRow = memo(function FileRow({
+  entry,
+  isOpen,
+  itemById,
+  onToggle,
+  onFocus,
+  t,
+}: {
+  entry: EnrichedFile
+  isOpen: boolean
+  itemById: ReadonlyMap<string, { item: HistoryItem; pos: number }>
+  onToggle: (path: string) => void
+  onFocus: (id: string) => void
+  t: Translate
+}): ReactElement {
+  const { file, dir, base, ext, latestTime } = entry
+  return (
+    <div className={`ch-file-item ${isOpen ? 'is-open' : ''}`}>
+      <div className="ch-file-row-wrap">
+        <button
+          type="button"
+          className="ch-file-expand"
+          aria-expanded={isOpen}
+          aria-label={t('openOperations')}
+          onClick={() => onToggle(file.path)}
+        >
+          {isOpen ? '▾' : '▸'}
+        </button>
+        <button
+          type="button"
+          className="ch-file-row"
+          title={file.path}
+          onClick={() => onFocus(file.recordIds[0])}
+        >
+          <div className="ch-file-left">
+            <span className={`ch-ext-badge ${ext.tone}`}>{ext.label}</span>
+            <span className="ch-file-path">
+              {dir && <span className="ch-file-dir">{dir}</span>}
+              <strong>{base}</strong>
+            </span>
+          </div>
+          <div className="ch-file-right">
+            <span className="ch-op-badges">
+              {file.reads > 0 && (
+                <i className="ch-op-tag is-r" title={t('reads')}>
+                  <em />
+                  {file.reads}
+                </i>
+              )}
+              {file.writes > 0 && (
+                <i className="ch-op-tag is-w" title={t('writes')}>
+                  <em />
+                  {file.writes}
+                </i>
+              )}
+              {file.searches > 0 && (
+                <i className="ch-op-tag is-s" title={t('searches')}>
+                  <em />
+                  {file.searches}
+                </i>
+              )}
+            </span>
+            {latestTime >= 0 && <span className="ch-fa-time">{fmtTime(latestTime)}</span>}
+          </div>
+        </button>
+      </div>
+      {isOpen && (
+        <div className="ch-file-ops">
+          {file.recordIds.map((recordId) => {
+            const found = itemById.get(recordId)
+            return (
+              <button
+                key={recordId}
+                type="button"
+                className="ch-fa-op"
+                onClick={() => onFocus(recordId)}
+              >
+                <span className="ch-fa-op-tool">{found?.item.toolName ?? t('tool')}</span>
+                <span className="ch-fa-op-seq">
+                  #{found?.item.seq ?? ''} · {t('jumpToBrowser')} ↗
+                </span>
+                {found?.item.time !== undefined && (
+                  <span className="ch-fa-time">{fmtTime(found.item.time)}</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+})
+
+export const FileActivityCard = memo(function FileActivityCard({
   summary,
   items,
   filter,
@@ -99,7 +211,26 @@ export function FileActivityCard({
     () => new Map(items.map((item, idx) => [item.id, { item, pos: idx + 1 }])),
     [items],
   )
-  const files = summary?.files ?? []
+  const files = summary?.files ?? EMPTY_FILES
+  const enrichedFiles = useMemo<EnrichedFile[]>(() => {
+    return files.map((file) => {
+      const { dir, base } = splitFilePath(file.path)
+      let latestTime = -1
+      for (const id of file.recordIds) {
+        const time = itemById.get(id)?.item.time ?? -1
+        if (time > latestTime) latestTime = time
+      }
+      return {
+        file,
+        dir,
+        base,
+        pathLower: file.path.toLocaleLowerCase(),
+        ext: fileExtension(file.path),
+        latestTime,
+        totalOps: file.reads + file.writes + file.searches,
+      }
+    })
+  }, [files, itemById])
   const totals = useMemo(() => {
     let reads = 0
     let writes = 0
@@ -111,28 +242,28 @@ export function FileActivityCard({
     }
     return { all: reads + writes + searches, reads, writes, searches }
   }, [files])
-  const lastTimeOf = (recordIds: readonly string[]): number => {
-    let latest = -1
-    for (const id of recordIds) {
-      const time = itemById.get(id)?.item.time ?? -1
-      if (time > latest) latest = time
-    }
-    return latest
-  }
   const visibleFiles = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
-    const filtered = files.filter((file) => {
-      if (filter !== 'all' && file[filter] === 0) return false
+    const filtered = enrichedFiles.filter((entry) => {
+      if (filter !== 'all' && entry.file[filter] === 0) return false
       if (!needle) return true
-      return file.path.toLocaleLowerCase().includes(needle)
+      return entry.pathLower.includes(needle)
     })
     return [...filtered].sort((a, b) => {
-      if (sort === 'path') return a.path.localeCompare(b.path)
-      if (sort === 'name') return splitFilePath(a.path).base.localeCompare(splitFilePath(b.path).base)
-      if (sort === 'latest') return lastTimeOf(b.recordIds) - lastTimeOf(a.recordIds)
-      return b.reads + b.writes + b.searches - (a.reads + a.writes + a.searches)
+      if (sort === 'path') return a.file.path.localeCompare(b.file.path)
+      if (sort === 'name') return a.base.localeCompare(b.base)
+      if (sort === 'latest') return b.latestTime - a.latestTime
+      return b.totalOps - a.totalOps
     })
-  }, [files, filter, query, sort, itemById])
+  }, [enrichedFiles, filter, query, sort])
+  const toggleFile = useCallback((path: string) => {
+    setExpanded((previous) => {
+      const next = new Set(previous)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }, [])
   return (
     <Card
       title={t('files')}
@@ -202,101 +333,156 @@ export function FileActivityCard({
         <p className="ch-note">{t('noMatches')}</p>
       ) : (
         <div className="ch-file-list">
-          {visibleFiles.map((file) => {
-            const { dir, base } = splitFilePath(file.path)
-            const ext = fileExtension(file.path)
-            const isOpen = expanded.has(file.path)
-            const latest = lastTimeOf(file.recordIds)
-            return (
-              <div key={file.path} className={`ch-file-item ${isOpen ? 'is-open' : ''}`}>
-                <div className="ch-file-row-wrap">
-                  <button
-                    type="button"
-                    className="ch-file-expand"
-                    aria-expanded={isOpen}
-                    aria-label={t('openOperations')}
-                    onClick={() =>
-                      setExpanded((previous) => {
-                        const next = new Set(previous)
-                        if (next.has(file.path)) next.delete(file.path)
-                        else next.add(file.path)
-                        return next
-                      })
-                    }
-                  >
-                    {isOpen ? '▾' : '▸'}
-                  </button>
-                  <button
-                    type="button"
-                    className="ch-file-row"
-                    title={file.path}
-                    onClick={() => onFocus(file.recordIds[0])}
-                  >
-                    <div className="ch-file-left">
-                      <span className={`ch-ext-badge ${ext.tone}`}>{ext.label}</span>
-                      <span className="ch-file-path">
-                        {dir && <span className="ch-file-dir">{dir}</span>}
-                        <strong>{base}</strong>
-                      </span>
-                    </div>
-                    <div className="ch-file-right">
-                      <span className="ch-op-badges">
-                        {file.reads > 0 && (
-                          <i className="ch-op-tag is-r" title={t('reads')}>
-                            <em />
-                            {file.reads}
-                          </i>
-                        )}
-                        {file.writes > 0 && (
-                          <i className="ch-op-tag is-w" title={t('writes')}>
-                            <em />
-                            {file.writes}
-                          </i>
-                        )}
-                        {file.searches > 0 && (
-                          <i className="ch-op-tag is-s" title={t('searches')}>
-                            <em />
-                            {file.searches}
-                          </i>
-                        )}
-                      </span>
-                      {latest >= 0 && <span className="ch-fa-time">{fmtTime(latest)}</span>}
-                    </div>
-                  </button>
-                </div>
-                {isOpen && (
-                  <div className="ch-file-ops">
-                    {file.recordIds.map((recordId) => {
-                      const entry = itemById.get(recordId)
-                      return (
-                        <button
-                          key={recordId}
-                          type="button"
-                          className="ch-fa-op"
-                          onClick={() => onFocus(recordId)}
-                        >
-                          <span className="ch-fa-op-tool">{entry?.item.toolName ?? t('tool')}</span>
-                          <span className="ch-fa-op-seq">
-                            #{entry?.item.seq ?? ''} · {t('jumpToBrowser')} ↗
-                          </span>
-                          {entry?.item.time !== undefined && (
-                            <span className="ch-fa-time">{fmtTime(entry.item.time)}</span>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          {visibleFiles.map((entry) => (
+            <FileRow
+              key={entry.file.path}
+              entry={entry}
+              isOpen={expanded.has(entry.file.path)}
+              itemById={itemById}
+              onToggle={toggleFile}
+              onFocus={onFocus}
+              t={t}
+            />
+          ))}
         </div>
       )}
     </Card>
   )
+})
+
+interface EnrichedCommand {
+  command: CommandActivity
+  program: string
+  commandLower: string
 }
 
-export function CommandExecutionsCard({
+const CommandRow = memo(function CommandRow({
+  entry,
+  isOpen,
+  callTime,
+  resultText,
+  onToggle,
+  onFocus,
+  t,
+}: {
+  entry: EnrichedCommand
+  isOpen: boolean
+  callTime?: number
+  resultText?: string
+  onToggle: (id: string) => void
+  onFocus: (id: string) => void
+  t: Translate
+}): ReactElement {
+  const { command, program } = entry
+  const tokens = useMemo(() => renderShellTokens(command.command), [command.command])
+  return (
+    <div
+      className={`ch-command-row ${command.isError ? 'is-error' : ''} ${isOpen ? 'is-open' : ''}`}
+    >
+      <div className="ch-command-line">
+        <button
+          type="button"
+          className="ch-file-expand"
+          aria-expanded={isOpen}
+          aria-label={t('details')}
+          onClick={() => onToggle(command.id)}
+        >
+          {isOpen ? '▾' : '▸'}
+        </button>
+        <button
+          type="button"
+          className="ch-command-main"
+          onClick={() => onFocus(command.recordId)}
+        >
+          <span
+            className={
+              command.isError === true
+                ? 'ch-cmd-status ch-result-error'
+                : command.isError === false
+                  ? 'ch-cmd-status ch-result-known'
+                  : 'ch-cmd-status ch-result-state'
+            }
+            title={t(
+              command.isError === true
+                ? 'failed'
+                : command.isError === false
+                  ? 'statusOk'
+                  : command.resultId
+                    ? 'completed'
+                    : 'pending',
+            )}
+          >
+            {command.isError === true
+              ? '!'
+              : command.isError === false
+                ? '✓'
+                : command.resultId
+                  ? '↳'
+                  : '…'}
+          </span>
+          <code>{tokens}</code>
+        </button>
+        <span className="ch-cmd-time">
+          #{command.seq}
+          {callTime !== undefined ? ` · ${fmtTime(callTime)}` : ''}
+        </span>
+        {command.resultId && (
+          <button
+            type="button"
+            className="ch-command-result"
+            onClick={() => onFocus(command.resultId!)}
+          >
+            {t('toolOutput')} ↗
+          </button>
+        )}
+      </div>
+      {isOpen && (
+        <div className="ch-cmd-inline">
+          <div className="ch-ts-card">
+            <div className="ch-ts-head">
+              <span className="ch-ts-call-name">{program}</span>
+              <div className="ch-ts-right">
+                {command.isError === true ? (
+                  <span className="ch-call-state is-err">
+                    <i />
+                    {t('failed')}
+                  </span>
+                ) : command.isError === false ? (
+                  <span className="ch-call-state is-ok">
+                    <i />
+                    {t('statusOk')}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <pre className="ch-cmd-full">{command.command}</pre>
+            {resultText && (
+              <>
+                <pre className="ch-cmd-out">
+                  {resultText.length > 1200 ? `${resultText.slice(0, 1200)}\n…` : resultText}
+                </pre>
+                {resultText.length > 1200 && command.resultId && (
+                  <div className="ch-cmd-trunc">
+                    <span>{t('previewShort')}</span>
+                    <button
+                      type="button"
+                      className="ch-link-btn"
+                      onClick={() => onFocus(command.resultId!)}
+                    >
+                      {t('jumpToBrowser')} ↗
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+})
+
+export const CommandExecutionsCard = memo(function CommandExecutionsCard({
   summary,
   items,
   selectedProgram,
@@ -317,27 +503,42 @@ export function CommandExecutionsCard({
   const [sortLatest, setSortLatest] = useState(true)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
-  const commands = summary?.commands ?? []
-  const failedCount = useMemo(
-    () => commands.filter((command) => command.isError === true).length,
+  const commands = summary?.commands ?? EMPTY_COMMANDS
+  const enrichedCommands = useMemo<EnrichedCommand[]>(
+    () =>
+      commands.map((command) => ({
+        command,
+        program: commandProgram(command.command),
+        commandLower: command.command.toLocaleLowerCase(),
+      })),
     [commands],
   )
-  const okCount = useMemo(
-    () => commands.filter((command) => command.isError === false).length,
-    [commands],
-  )
-  const pendingCount = useMemo(
-    () => commands.filter((command) => !command.resultId && command.isError === undefined).length,
-    [commands],
-  )
-  const programs = useMemo(() => {
+  const { failedCount, okCount, pendingCount, firstFailed, programs } = useMemo(() => {
+    let failed = 0
+    let ok = 0
+    let pending = 0
+    let firstErr: CommandActivity | undefined
     const counts = new Map<string, number>()
-    for (const command of commands) {
-      const prog = commandProgram(command.command)
-      counts.set(prog, (counts.get(prog) ?? 0) + 1)
+    for (const entry of enrichedCommands) {
+      const command = entry.command
+      if (command.isError === true) {
+        failed += 1
+        if (!firstErr) firstErr = command
+      } else if (command.isError === false) {
+        ok += 1
+      } else if (!command.resultId) {
+        pending += 1
+      }
+      counts.set(entry.program, (counts.get(entry.program) ?? 0) + 1)
     }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])
-  }, [commands])
+    return {
+      failedCount: failed,
+      okCount: ok,
+      pendingCount: pending,
+      firstFailed: firstErr,
+      programs: [...counts.entries()].sort((a, b) => b[1] - a[1]),
+    }
+  }, [enrichedCommands])
   const activeProgram =
     selectedProgram !== null && programs.some(([prog]) => prog === selectedProgram)
       ? selectedProgram
@@ -346,24 +547,29 @@ export function CommandExecutionsCard({
     const needle = progQuery.trim().toLocaleLowerCase()
     return needle ? programs.filter(([prog]) => prog.toLocaleLowerCase().includes(needle)) : programs
   }, [programs, progQuery])
-  const firstFailed = useMemo(
-    () => commands.find((command) => command.isError === true),
-    [commands],
-  )
   const topProgram = programs[0]
   const visibleCommands = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
-    const filtered = commands.filter((command) => {
+    const filtered = enrichedCommands.filter((entry) => {
+      const command = entry.command
       if (statusFilter === 'err' && command.isError !== true) return false
       if (statusFilter === 'ok' && command.isError !== false) return false
       if (statusFilter === 'pending' && (command.resultId || command.isError !== undefined))
         return false
-      if (activeProgram !== null && commandProgram(command.command) !== activeProgram) return false
-      if (needle && !command.command.toLocaleLowerCase().includes(needle)) return false
+      if (activeProgram !== null && entry.program !== activeProgram) return false
+      if (needle && !entry.commandLower.includes(needle)) return false
       return true
     })
     return sortLatest ? [...filtered].reverse() : filtered
-  }, [commands, statusFilter, activeProgram, query, sortLatest])
+  }, [enrichedCommands, statusFilter, activeProgram, query, sortLatest])
+  const toggleCommand = useCallback((id: string) => {
+    setExpanded((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
   const failedRate =
     commands.length > 0 ? `${((failedCount / commands.length) * 100).toFixed(1)}%` : '0%'
   return (
@@ -547,126 +753,22 @@ export function CommandExecutionsCard({
               <p className="ch-note">{t('noMatches')}</p>
             ) : (
               <div className="ch-command-list">
-                {visibleCommands.map((command) => {
-                  const isOpen = expanded.has(command.id)
-                  const callItem = itemById.get(command.recordId)
-                  const resultItem = command.resultId ? itemById.get(command.resultId) : undefined
+                {visibleCommands.map((entry) => {
+                  const callItem = itemById.get(entry.command.recordId)
+                  const resultItem = entry.command.resultId
+                    ? itemById.get(entry.command.resultId)
+                    : undefined
                   return (
-                    <div
-                      key={command.id}
-                      className={`ch-command-row ${command.isError ? 'is-error' : ''} ${isOpen ? 'is-open' : ''}`}
-                    >
-                      <div className="ch-command-line">
-                        <button
-                          type="button"
-                          className="ch-file-expand"
-                          aria-expanded={isOpen}
-                          aria-label={t('details')}
-                          onClick={() =>
-                            setExpanded((previous) => {
-                              const next = new Set(previous)
-                              if (next.has(command.id)) next.delete(command.id)
-                              else next.add(command.id)
-                              return next
-                            })
-                          }
-                        >
-                          {isOpen ? '▾' : '▸'}
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-command-main"
-                          onClick={() => onFocus(command.recordId)}
-                        >
-                          <span
-                            className={
-                              command.isError === true
-                                ? 'ch-cmd-status ch-result-error'
-                                : command.isError === false
-                                  ? 'ch-cmd-status ch-result-known'
-                                  : 'ch-cmd-status ch-result-state'
-                            }
-                            title={t(
-                              command.isError === true
-                                ? 'failed'
-                                : command.isError === false
-                                  ? 'statusOk'
-                                  : command.resultId
-                                    ? 'completed'
-                                    : 'pending',
-                            )}
-                          >
-                            {command.isError === true
-                              ? '!'
-                              : command.isError === false
-                                ? '✓'
-                                : command.resultId
-                                  ? '↳'
-                                  : '…'}
-                          </span>
-                          <code>{renderShellTokens(command.command)}</code>
-                        </button>
-                        <span className="ch-cmd-time">
-                          #{command.seq}
-                          {callItem?.time !== undefined ? ` · ${fmtTime(callItem.time)}` : ''}
-                        </span>
-                        {command.resultId && (
-                          <button
-                            type="button"
-                            className="ch-command-result"
-                            onClick={() => onFocus(command.resultId!)}
-                          >
-                            {t('toolOutput')} ↗
-                          </button>
-                        )}
-                      </div>
-                      {isOpen && (
-                        <div className="ch-cmd-inline">
-                          <div className="ch-ts-card">
-                            <div className="ch-ts-head">
-                              <span className="ch-ts-call-name">
-                                {commandProgram(command.command)}
-                              </span>
-                              <div className="ch-ts-right">
-                                {command.isError === true ? (
-                                  <span className="ch-call-state is-err">
-                                    <i />
-                                    {t('failed')}
-                                  </span>
-                                ) : command.isError === false ? (
-                                  <span className="ch-call-state is-ok">
-                                    <i />
-                                    {t('statusOk')}
-                                  </span>
-                                ) : null}
-                              </div>
-                            </div>
-                            <pre className="ch-cmd-full">{command.command}</pre>
-                            {resultItem && resultItem.text && (
-                              <>
-                                <pre className="ch-cmd-out">
-                                  {resultItem.text.length > 1200
-                                    ? `${resultItem.text.slice(0, 1200)}\n…`
-                                    : resultItem.text}
-                                </pre>
-                                {resultItem.text.length > 1200 && command.resultId && (
-                                  <div className="ch-cmd-trunc">
-                                    <span>{t('previewShort')}</span>
-                                    <button
-                                      type="button"
-                                      className="ch-link-btn"
-                                      onClick={() => onFocus(command.resultId!)}
-                                    >
-                                      {t('jumpToBrowser')} ↗
-                                    </button>
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <CommandRow
+                      key={entry.command.id}
+                      entry={entry}
+                      isOpen={expanded.has(entry.command.id)}
+                      callTime={callItem?.time}
+                      resultText={resultItem?.text}
+                      onToggle={toggleCommand}
+                      onFocus={onFocus}
+                      t={t}
+                    />
                   )
                 })}
               </div>
@@ -676,4 +778,4 @@ export function CommandExecutionsCard({
       )}
     </Card>
   )
-}
+})

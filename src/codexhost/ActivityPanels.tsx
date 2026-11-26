@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent, type ReactElement } from 'react'
+import { memo, useMemo, useState, type MouseEvent, type ReactElement } from 'react'
 import { fmt, fmtTime } from '../client/format.ts'
 import type { HistoryItem } from './api.ts'
 import type { RelatedSession } from './relationships.ts'
@@ -39,7 +39,13 @@ function computeTurns(items: readonly HistoryItem[]): {
   return { turns, turnByIndex }
 }
 
-export function ActivityTimeline({
+const LANES = ['user', 'assistant', 'tool', 'event'] as const
+
+function laneY(kind: HistoryItem['kind']): number {
+  return 26 + LANES.indexOf(kind) * 25
+}
+
+export const ActivityTimeline = memo(function ActivityTimeline({
   items,
   pairs,
   available,
@@ -57,7 +63,8 @@ export function ActivityTimeline({
   t: Translate
 }): ReactElement {
   const [hover, setHover] = useState<number | null>(null)
-  const selected = items.findIndex((item) => item.id === focus)
+  const indexById = useMemo(() => new Map(items.map((item, idx) => [item.id, idx])), [items])
+  const selected = focus !== undefined ? (indexById.get(focus) ?? -1) : -1
   const effective = selected < 0 ? Math.max(0, items.length - 1) : selected
   const indexAt = (event: MouseEvent<SVGSVGElement>): number | null => {
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -69,14 +76,12 @@ export function ActivityTimeline({
     const index = indexAt(event)
     if (index !== null && items[index]) onFocus(items[index].id)
   }
-  const lanes = ['user', 'assistant', 'tool', 'event'] as const
   const xOf = (index: number) => eventX(index, items.length)
-  const yOf = (kind: HistoryItem['kind']) => 26 + lanes.indexOf(kind) * 25
   const markerWidth = Math.max(3.5, Math.min(10, 560 / Math.max(1, items.length)))
   const previewIndex = hover !== null && items[hover] ? hover : effective
   const preview = items[previewIndex]
   const { turns, turnByIndex } = useMemo(() => computeTurns(items), [items])
-  const indexById = useMemo(() => new Map(items.map((item, idx) => [item.id, idx])), [items])
+  const turnByNumber = useMemo(() => new Map(turns.map((span) => [span.turn, span])), [turns])
   const bridges = useMemo(() => {
     const list: { key: string; x1: number; x2: number; isError: boolean }[] = []
     for (let index = 0; index < items.length; index++) {
@@ -89,17 +94,92 @@ export function ActivityTimeline({
       const result = items[targetIndex]
       list.push({
         key: `${item.id}-${partnerId}`,
-        x1: xOf(index),
-        x2: xOf(targetIndex),
+        x1: eventX(index, items.length),
+        x2: eventX(targetIndex, items.length),
         isError: result?.isError === true || item.isError === true,
       })
     }
     return list
   }, [items, pairs, indexById])
+  const staticPlot = useMemo(
+    () => (
+      <>
+        {turns.map((turn, turnIndex) => {
+          const x1 =
+            turnIndex === 0
+              ? 0
+              : (eventX(turn.start - 1, items.length) + eventX(turn.start, items.length)) / 2
+          const x2 =
+            turnIndex === turns.length - 1
+              ? 720
+              : (eventX(turn.end, items.length) + eventX(turn.end + 1, items.length)) / 2
+          return (
+            <g key={turn.turn}>
+              {turnIndex % 2 === 1 && (
+                <rect
+                  x={x1}
+                  y={2}
+                  width={Math.max(0, x2 - x1)}
+                  height={116}
+                  rx={4}
+                  className="ch-turn-band"
+                />
+              )}
+              {turnIndex > 0 && (
+                <line x1={x1} x2={x1} y1={4} y2={116} className="ch-turn-divider" />
+              )}
+            </g>
+          )
+        })}
+        {LANES.map((lane) => (
+          <line
+            key={lane}
+            x1="0"
+            x2="720"
+            y1={laneY(lane)}
+            y2={laneY(lane)}
+            className="ch-lane-line"
+          />
+        ))}
+        {bridges.map((bridge) => (
+          <line
+            key={bridge.key}
+            x1={bridge.x1}
+            x2={bridge.x2}
+            y1={laneY('tool')}
+            y2={laneY('tool')}
+            className={`ch-tool-bridge ${bridge.isError ? 'is-error' : ''}`}
+          />
+        ))}
+        {items.map((item, index) => {
+          const cx = eventX(index, items.length)
+          const y = laneY(item.kind) - 8
+          const fill = item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[item.kind]
+          return (
+            <g key={item.id}>
+              <rect
+                x={cx - markerWidth / 2}
+                y={y}
+                width={markerWidth}
+                height={16}
+                rx="2.5"
+                fill={fill}
+                opacity={0.72}
+              />
+              {item.isError === true && (
+                <rect x={cx - 4} y={4} width={8} height={8} rx={4} fill="var(--ch-danger)" />
+              )}
+            </g>
+          )
+        })}
+      </>
+    ),
+    [items, turns, bridges, markerWidth],
+  )
   const previewPairId = preview ? pairs.get(preview.id) : undefined
   const previewPair = previewPairId ? items[indexById.get(previewPairId) ?? -1] : undefined
   const activeTurn = turnByIndex[previewIndex] ?? 1
-  const activeTurnSpan = turns.find((span) => span.turn === activeTurn)
+  const activeTurnSpan = turnByNumber.get(activeTurn)
   const turnUserRecord = useMemo(() => {
     if (!activeTurnSpan) return undefined
     for (let idx = activeTurnSpan.start; idx <= activeTurnSpan.end; idx++) {
@@ -115,6 +195,12 @@ export function ActivityTimeline({
     return undefined
   }, [activeTurnSpan, items])
   const sliderPercent = items.length > 1 ? (effective / (items.length - 1)) * 100 : 100
+  const highlightIndices =
+    hover !== null && hover !== effective && items[hover]
+      ? [effective, hover]
+      : items[effective]
+        ? [effective]
+        : []
   return (
     <Card
       title={t('activityTimeline')}
@@ -134,7 +220,7 @@ export function ActivityTimeline({
         <>
           <div className="ch-activity-chart">
             <div className="ch-lane-labels">
-              {lanes.map((lane) => (
+              {LANES.map((lane) => (
                 <span key={lane} className="ch-lane-label">
                   <i style={{ background: ROLE_COLOR[lane] }} />
                   {t(lane)}
@@ -164,51 +250,13 @@ export function ActivityTimeline({
                 role="img"
                 aria-label={t('activitySequence')}
                 onClick={pick}
-                onMouseMove={(event) => setHover(indexAt(event))}
+                onMouseMove={(event) => {
+                  const next = indexAt(event)
+                  setHover((previous) => (previous === next ? previous : next))
+                }}
                 onMouseLeave={() => setHover(null)}
               >
-                {turns.map((turn, turnIndex) => {
-                  const x1 = turnIndex === 0 ? 0 : (xOf(turn.start - 1) + xOf(turn.start)) / 2
-                  const x2 =
-                    turnIndex === turns.length - 1 ? 720 : (xOf(turn.end) + xOf(turn.end + 1)) / 2
-                  return (
-                    <g key={turn.turn}>
-                      {turnIndex % 2 === 1 && (
-                        <rect
-                          x={x1}
-                          y={2}
-                          width={Math.max(0, x2 - x1)}
-                          height={116}
-                          rx={4}
-                          className="ch-turn-band"
-                        />
-                      )}
-                      {turnIndex > 0 && (
-                        <line x1={x1} x2={x1} y1={4} y2={116} className="ch-turn-divider" />
-                      )}
-                    </g>
-                  )
-                })}
-                {lanes.map((lane) => (
-                  <line
-                    key={lane}
-                    x1="0"
-                    x2="720"
-                    y1={yOf(lane)}
-                    y2={yOf(lane)}
-                    className="ch-lane-line"
-                  />
-                ))}
-                {bridges.map((bridge) => (
-                  <line
-                    key={bridge.key}
-                    x1={bridge.x1}
-                    x2={bridge.x2}
-                    y1={yOf('tool')}
-                    y2={yOf('tool')}
-                    className={`ch-tool-bridge ${bridge.isError ? 'is-error' : ''}`}
-                  />
-                ))}
+                {staticPlot}
                 <line
                   x1={xOf(effective)}
                   x2={xOf(effective)}
@@ -216,34 +264,22 @@ export function ActivityTimeline({
                   y2="118"
                   className="ch-timeline-cursor"
                 />
-                {items.map((item, index) => {
-                  const active = index === effective || hover === index
-                  const width = active ? Math.min(12, markerWidth + 2) : markerWidth
-                  const height = active ? 20 : 16
-                  const y = yOf(item.kind) - height / 2
+                {highlightIndices.map((index) => {
+                  const item = items[index]
+                  if (!item) return null
+                  const width = Math.min(12, markerWidth + 2)
                   const fill = item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[item.kind]
                   return (
-                    <g key={item.id}>
-                      <rect
-                        x={xOf(index) - width / 2}
-                        y={y}
-                        width={width}
-                        height={height}
-                        rx="2.5"
-                        fill={fill}
-                        opacity={active ? 1 : 0.72}
-                      />
-                      {item.isError === true && (
-                        <rect
-                          x={xOf(index) - 4}
-                          y={4}
-                          width={8}
-                          height={8}
-                          rx={4}
-                          fill="var(--ch-danger)"
-                        />
-                      )}
-                    </g>
+                    <rect
+                      key={`hi-${item.id}`}
+                      x={xOf(index) - width / 2}
+                      y={laneY(item.kind) - 10}
+                      width={width}
+                      height={20}
+                      rx="2.5"
+                      fill={fill}
+                      opacity={1}
+                    />
                   )
                 })}
               </svg>
@@ -378,7 +414,7 @@ export function ActivityTimeline({
       )}
     </Card>
   )
-}
+})
 
 function initialsOf(text: string): string {
   const words = text
@@ -390,7 +426,7 @@ function initialsOf(text: string): string {
   return (text.trim().slice(0, 2) || 'CH').toUpperCase()
 }
 
-export function SessionNetworkCard({
+export const SessionNetworkCard = memo(function SessionNetworkCard({
   related,
   currentTitle,
   currentHarness,
@@ -529,5 +565,5 @@ export function SessionNetworkCard({
       <p className="ch-note">{t('familyScope')}</p>
     </Card>
   )
-}
+})
 

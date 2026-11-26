@@ -79,6 +79,12 @@
   border: 1px solid transparent;
   border-radius: 7px;
   min-width: 0;
+  flex-shrink: 0;
+}
+.ch-file-item:not(.is-open),
+.ch-command-row:not(.is-open) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 31px;
 }
 .ch-file-item:nth-child(even):not(.is-open),
 .ch-command-row:nth-child(even):not(.is-open) {

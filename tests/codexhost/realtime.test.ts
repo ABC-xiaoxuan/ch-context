@@ -69,11 +69,15 @@ test('stream handles fragmented NDJSON and cancels its subscription', async () =
       '\ninvalid-json\n{"type":"changed","threadId":"b","method":"thread/tokenUsage/updated"}\n{"type":"changed","threadId":"a",',
     ),
   )
-  source.enqueue(encoder.encode('"method":"codexhost/thread/usage/updated"}\n'))
+  source.enqueue(
+    encoder.encode(
+      '"method":"codexhost/thread/usage/updated"}\n{"type":"changed","threadId":"a","method":"thread/updated"}\n',
+    ),
+  )
   await arrived
   stop()
   await new Promise<void>((resolve) => setImmediate(resolve))
-  assert.equal(invalidations, 1)
+  assert.equal(invalidations, 2)
   assert.deepEqual(statuses, [true])
   assert.equal(requestSignal?.aborted, true)
 })

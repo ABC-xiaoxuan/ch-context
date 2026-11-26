@@ -50,7 +50,7 @@ npm run pack:market
 
 `npm run check` performs strict type checking, focused Node tests, both builds, and native/compatibility package validation. Browser commands require installed Chrome/Edge/Chromium; set `CH_CONTEXT_CHROME_PATH` when needed. Synthetic fixtures exercise UI and lifecycle without model turns or real conversation data.
 
-`npm run pack:market` creates `dist/ch-context-0.3.3.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
+`npm run pack:market` creates `dist/ch-context-0.3.4.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
 
 Tracked prebuilt files `web/index.mjs`, `web/style.css` and `lib/client.js` must be rebuilt with source changes. CI rejects stale artifacts. Never change published ZIP bytes without increasing the manifest version.
 

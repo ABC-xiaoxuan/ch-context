@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { summarizeActivity } from './activity.ts'
+import type { HistoryItem, SessionRow } from './api.ts'
 import { Icon } from './components.tsx'
 import { Inspector } from './Inspector.tsx'
 import { Overview } from './Overview.tsx'
@@ -22,6 +23,9 @@ import {
   safeFileSlug,
 } from './report.ts'
 import { useConversationSurface } from './conversation-surface.ts'
+
+const EMPTY_ROWS: readonly SessionRow[] = []
+const EMPTY_ITEMS: readonly HistoryItem[] = []
 
 export interface AppProps {
   ctx: ViewContext
@@ -59,37 +63,56 @@ export function App({
     'idle',
   )
   const list = useSessions(cursors[pageIndex] ?? null, revision)
-  const overviewUsage = useOverviewUsage(
-    list.page?.items ?? [],
-    !embedded && activeView === 'overview',
-    revision,
+  const listRows = list.page?.items ?? EMPTY_ROWS
+  const overviewEnabled = !embedded && activeView === 'overview'
+  const inspectorEnabled = activeView === 'inspector'
+  const overviewUsage = useOverviewUsage(listRows, overviewEnabled, revision)
+  const usage = useUsage(selected, projection, revision, inspectorEnabled)
+  const history = useHistory(selected, revision, usage.snapshotSequence || null, inspectorEnabled)
+  const historyItems = history.page?.items ?? EMPTY_ITEMS
+  const summary = useMemo(
+    () => (history.page ? summarizeActivity(history.page.items) : null),
+    [history.page],
   )
-  const usage = useUsage(selected, projection, revision)
-  const history = useHistory(selected, revision, usage.snapshotSequence || null)
-  const row = list.page?.items.find((item) => item.id === selected)
-  const filtered = (list.page?.items ?? []).filter(
-    (item) =>
-      isThreadId(item.id) &&
-      `${item.title} ${item.harness ?? ''} ${item.cwd ?? ''}`
-        .toLocaleLowerCase()
-        .includes(query.toLocaleLowerCase()),
-  )
+  const row = useMemo(() => listRows.find((item) => item.id === selected), [listRows, selected])
+  const filtered = useMemo(() => {
+    if (embedded || !chooserOpen) return EMPTY_ROWS
+    const needle = query.toLocaleLowerCase()
+    return listRows.filter(
+      (item) =>
+        isThreadId(item.id) &&
+        (!needle ||
+          `${item.title} ${item.harness ?? ''} ${item.cwd ?? ''}`
+            .toLocaleLowerCase()
+            .includes(needle)),
+    )
+  }, [embedded, chooserOpen, listRows, query])
   useEffect(() => {
     setCopied('idle')
     setExportStatus('idle')
     setExportOpen(false)
   }, [selected])
-  const refresh = (): void => setRevision((value) => value + 1)
-  const select = (id: string): void => {
-    if (embedded) {
-      const workspace = recordOf(ctx.get('uiWorkspace'))
-      if (typeof workspace?.openSession === 'function') workspace.openSession(id)
-      return
-    }
-    setPicked(id)
-    setMode('inspector')
-    setChooserOpen(false)
-  }
+  const refresh = useCallback((): void => setRevision((value) => value + 1), [])
+  const select = useCallback(
+    (id: string): void => {
+      if (embedded) {
+        const workspace = recordOf(ctx.get('uiWorkspace'))
+        if (typeof workspace?.openSession === 'function') workspace.openSession(id)
+        return
+      }
+      setPicked(id)
+      setMode('inspector')
+      setChooserOpen(false)
+    },
+    [embedded, ctx],
+  )
+  const onPrevPage = useCallback(() => setPageIndex((value) => Math.max(0, value - 1)), [])
+  const nextCursor = list.page?.nextCursor ?? null
+  const onNextPage = useCallback(() => {
+    if (!nextCursor) return
+    setCursors((values) => [...values.slice(0, pageIndex + 1), nextCursor])
+    setPageIndex((value) => value + 1)
+  }, [nextCursor, pageIndex])
   const copy = async (): Promise<void> => {
     try {
       await navigator.clipboard.writeText(
@@ -107,20 +130,17 @@ export function App({
   const workspaceName = row?.cwd?.split(/[\\/]/).filter(Boolean).at(-1)
   const currentTitle = row?.title || selected || t('noSession')
   const currentHarness = row?.harness ?? 'CodexHost'
-  const buildReportInput = () => {
-    const items = history.page?.items ?? []
-    return {
-      threadId: selected ?? '',
-      title: currentTitle,
-      harness: currentHarness,
-      cwd: row?.cwd,
-      exportedAt: Date.now(),
-      usage: usage.usage,
-      summary: history.page ? summarizeActivity(items) : null,
-      items,
-      related: selected ? relatedSessions(list.page?.items ?? [], selected) : [],
-    }
-  }
+  const buildReportInput = () => ({
+    threadId: selected ?? '',
+    title: currentTitle,
+    harness: currentHarness,
+    cwd: row?.cwd,
+    exportedAt: Date.now(),
+    usage: usage.usage,
+    summary,
+    items: historyItems,
+    related: selected ? relatedSessions(listRows, selected) : [],
+  })
   const copyReportMarkdown = async (): Promise<void> => {
     if (!selected) return
     try {
@@ -396,21 +416,16 @@ export function App({
 
         {activeView === 'overview' ? (
           <Overview
-            rows={list.page?.items ?? []}
+            rows={listRows}
             usageById={overviewUsage}
             loading={list.loading}
             error={list.error}
             selected={selected}
             hasSelected={Boolean(selected)}
             pageIndex={pageIndex}
-            hasNext={Boolean(list.page?.nextCursor)}
-            onPrev={() => setPageIndex((value) => Math.max(0, value - 1))}
-            onNext={() => {
-              const next = list.page?.nextCursor
-              if (!next) return
-              setCursors((values) => [...values.slice(0, pageIndex + 1), next])
-              setPageIndex((value) => value + 1)
-            }}
+            hasNext={Boolean(nextCursor)}
+            onPrev={onPrevPage}
+            onNext={onNextPage}
             onSelect={select}
             onRetry={refresh}
             t={t}
@@ -439,7 +454,8 @@ export function App({
               key={selected}
               usage={usage}
               history={history}
-              rows={list.page?.items ?? []}
+              summary={summary}
+              rows={listRows}
               selected={selected}
               currentTitle={currentTitle}
               currentHarness={currentHarness}

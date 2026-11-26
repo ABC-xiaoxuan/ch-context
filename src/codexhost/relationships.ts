@@ -28,13 +28,15 @@ function parentsOf(row: SessionRow): { id: string; kind: RelationshipKind }[] {
 
 export function relatedSessions(rows: readonly SessionRow[], selected: string): RelatedSession[] {
   if (!isThreadId(selected)) return []
+  const rowById = new Map<string, SessionRow>()
+  for (const row of rows) rowById.set(row.id, row)
   const result = new Map<string, RelatedSession>()
   const add = (id: string, role: RelatedSession['role'], kind: RelationshipKind): void => {
     if (!isThreadId(id) || id === selected) return
     const key = `${role}:${id}`
     const previous = result.get(key)
     if (previous && PRIORITY[previous.kind] >= PRIORITY[kind]) return
-    const row = rows.find((item) => item.id === id)
+    const row = rowById.get(id)
     result.set(key, {
       id,
       title: row?.title ?? '',
@@ -44,7 +46,7 @@ export function relatedSessions(rows: readonly SessionRow[], selected: string): 
       ...(row?.harness ? { harness: row.harness } : {}),
     })
   }
-  const current = rows.find((row) => row.id === selected)
+  const current = rowById.get(selected)
   if (current) for (const edge of parentsOf(current)) add(edge.id, 'parent', edge.kind)
   for (const row of rows) {
     if (!isThreadId(row.id) || row.id === selected) continue

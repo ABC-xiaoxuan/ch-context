@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from 'react'
+import { memo, useMemo, type ReactElement } from 'react'
 import { fmt } from '../client/format.ts'
 import { commandProgram, type ActivitySummary } from './activity.ts'
 import type { HistoryItem } from './api.ts'
@@ -18,7 +18,7 @@ const CHIP_PALETTE = [
   'var(--ch-green)',
 ]
 
-export function ContextStatsCard({
+export const ContextStatsCard = memo(function ContextStatsCard({
   usage,
   summary,
   items,
@@ -276,4 +276,4 @@ export function ContextStatsCard({
       </div>
     </Card>
   )
-}
+})

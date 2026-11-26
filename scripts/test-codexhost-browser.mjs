@@ -227,6 +227,54 @@ try {
   await page.getByRole('button', { name: 'Toggle character-volume treemap', exact: true }).click()
   await page.locator('.ch-map-block').first().waitFor()
   await page.getByRole('button', { name: 'Toggle character-volume treemap', exact: true }).click()
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.ch-browser-records')?.getAttribute('aria-busy') === 'false' &&
+      !document.querySelector('.ch-browser-footer .ch-button')?.hasAttribute('disabled'),
+  )
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click()
+  await page.locator('.ch-overview-card').filter({ hasText: '52.0%' }).waitFor()
+  const rpcCountAfterFirstOverview = await page.evaluate(
+    () => window.chFixture.requests.filter((request) => request.path.endsWith('ch/v1/rpc')).length,
+  )
+  await page.getByRole('tab', { name: 'Inspector', exact: true }).click()
+  await gauge('52.0%')
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.ch-browser-records')?.getAttribute('aria-busy') === 'false' &&
+      !document.querySelector('.ch-browser-footer .ch-button')?.hasAttribute('disabled'),
+  )
+  const rpcCountBeforeCachedOverview = await page.evaluate(
+    () => window.chFixture.requests.filter((request) => request.path.endsWith('ch/v1/rpc')).length,
+  )
+  assert.ok(rpcCountBeforeCachedOverview >= rpcCountAfterFirstOverview)
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click()
+  await page.locator('.ch-overview-card').filter({ hasText: '52.0%' }).waitFor()
+  await page.waitForTimeout(200)
+  assert.equal(
+    await page.evaluate(
+      () =>
+        window.chFixture.requests.filter((request) => request.path.endsWith('ch/v1/rpc')).length,
+    ),
+    rpcCountBeforeCachedOverview,
+  )
+  await page.getByRole('tab', { name: 'Inspector', exact: true }).click()
+  await gauge('52.0%')
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.ch-browser-records')?.getAttribute('aria-busy') === 'false' &&
+      !document.querySelector('.ch-browser-footer .ch-button')?.hasAttribute('disabled'),
+  )
+  const strip = page.locator('.ch-tstrip-svg')
+  await strip.focus()
+  await strip.press('Home')
+  await strip.press('Enter')
+  await record(6)
+  await strip.focus()
+  await strip.press('End')
+  await strip.press('Enter')
+  await record(13)
   await page.locator('.ch-export-menu > summary').click()
   await page.getByRole('menuitem', { name: 'Copy Markdown report', exact: true }).click()
   assert.match(await page.evaluate(() => navigator.clipboard.readText()), /Context Diagnostic Report/)

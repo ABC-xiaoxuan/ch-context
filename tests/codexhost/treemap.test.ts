@@ -57,6 +57,11 @@ test('findTextMatches finds non-overlapping case-insensitive literal matches and
   const dottedMatches = findTextMatches(dotted, 'alpha')
   assert.equal(dottedMatches.length, 1)
   assert.equal(dotted.slice(dottedMatches[0]!.start, dottedMatches[0]!.end), 'alpha')
+  const dense = 'prefix TOKEN middle token '.repeat(250)
+  const denseMatches = findTextMatches(dense, 'token', 500)
+  assert.equal(denseMatches.length, 500)
+  assert.equal(dense.slice(denseMatches[0]!.start, denseMatches[0]!.end), 'TOKEN')
+  assert.equal(dense.slice(denseMatches[1]!.start, denseMatches[1]!.end), 'token')
 })
 
 test('parseRecordArguments accepts plain JSON objects and rejects arrays or invalid JSON', () => {

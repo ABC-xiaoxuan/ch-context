@@ -635,6 +635,11 @@
 .ch-br-elem {
   border-radius: 7px;
   overflow: hidden;
+  flex-shrink: 0;
+}
+.ch-br-elem:not(.is-selected) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 31px;
 }
 .ch-br-elem:nth-child(even):not(.is-selected) {
   background: var(--ch-stripe);

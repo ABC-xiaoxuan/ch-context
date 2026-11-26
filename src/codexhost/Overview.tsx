@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import { Donut } from '../client/components/donut.tsx'
 import { fmt, fmtDuration } from '../client/format.ts'
 import type { SessionRow } from './api.ts'
@@ -86,7 +86,102 @@ function MiniRing({
   )
 }
 
-export function Overview({
+const OverviewSessionCard = memo(function OverviewSessionCard({
+  row,
+  usage,
+  isSelected,
+  isCompared,
+  onSelect,
+  onToggleCompare,
+  t,
+}: {
+  row: SessionRow
+  usage: Usage | null
+  isSelected: boolean
+  isCompared: boolean
+  onSelect: (id: string) => void
+  onToggleCompare: (id: string) => void
+  t: Translate
+}): ReactElement {
+  const occ = occupancyOf(usage)
+  const ws = workspaceLabelOf(row.cwd)
+  const rel = relationLabel(row, t)
+  const cacheRate = usage?.cacheHitRatePercent ?? usage?.sessionCacheHitRatePercent
+  return (
+    <article
+      className={`ch-overview-card ${isSelected ? 'is-selected' : ''} ${isCompared ? 'is-compared' : ''}`}
+    >
+      <div className="ch-ov-card-head">
+        <button
+          type="button"
+          className="ch-ov-card-title-btn"
+          title={row.title || row.id}
+          onClick={() => onSelect(row.id)}
+        >
+          <strong>{row.title || row.id}</strong>
+        </button>
+        <div className="ch-ov-card-right">
+          {row.updatedAt !== undefined && (
+            <span className="ch-ov-card-date">{formatDateShort(row.updatedAt)}</span>
+          )}
+          <button
+            type="button"
+            className={`ch-compare-pin ${isCompared ? 'is-active' : ''}`}
+            aria-pressed={isCompared}
+            title={t('compareHint')}
+            onClick={() => onToggleCompare(row.id)}
+          >
+            {t(isCompared ? 'compareSelected' : 'compareToggle')}
+          </button>
+        </div>
+      </div>
+      <div className="ch-ov-card-tags">
+        {ws && <span className="ch-meta-tag is-ws">{ws}</span>}
+        <span className="ch-meta-tag">{row.harness ?? 'CodexHost'}</span>
+        {isSelected && <span className="ch-meta-tag is-current">{t('currentSession')}</span>}
+        {rel && (
+          <span className="ch-dot-pill">
+            <i className="is-event" />
+            {rel}
+          </span>
+        )}
+      </div>
+      <button type="button" className="ch-ov-card-body" onClick={() => onSelect(row.id)}>
+        <MiniRing percent={occ ? occ.percent : null} used={occ?.used} noLabel={t('noTelemetryYet')} />
+        <div className="ch-ov-kv">
+          <div className="ch-ov-kv-row">
+            <span>{t('context')}</span>
+            <b>
+              {occ?.used !== undefined && occ.capacity !== undefined
+                ? `${fmt(occ.used)} / ${fmt(occ.capacity)}`
+                : occ
+                  ? `${occ.percent.toFixed(1)}%`
+                  : '—'}
+            </b>
+          </div>
+          <div className="ch-ov-kv-row">
+            <span>{t('total')}</span>
+            <b>{fmt(usage?.totalTokens)}</b>
+          </div>
+          <div className="ch-ov-kv-row">
+            <span>{t('cost')}</span>
+            <b>
+              {usage?.totalCostUsd === undefined
+                ? '—'
+                : `${(usage.unpricedModels?.length ?? 0) > 0 ? '≥ ' : ''}${formatUsd(usage.totalCostUsd)}`}
+            </b>
+          </div>
+          <div className="ch-ov-kv-row">
+            <span>{usage?.cacheHitRatePercent !== undefined ? t('cacheHit') : t('avgCache')}</span>
+            <b>{cacheRate === undefined ? '—' : `${cacheRate.toFixed(1)}%`}</b>
+          </div>
+        </div>
+      </button>
+    </article>
+  )
+})
+
+export const Overview = memo(function Overview({
   rows,
   usageById,
   loading,
@@ -146,16 +241,21 @@ export function Overview({
   }, [validRows])
   const activeDate =
     selectedDate !== null && validDates.has(selectedDate) ? selectedDate : null
-  const activeCompareIds = useMemo(
-    () => compareIds.filter((id) => validRows.some((row) => row.id === id)),
-    [compareIds, validRows],
+  const validRowById = useMemo(
+    () => new Map(validRows.map((row) => [row.id, row])),
+    [validRows],
   )
+  const activeCompareIds = useMemo(
+    () => compareIds.filter((id) => validRowById.has(id)),
+    [compareIds, validRowById],
+  )
+  const activeCompareSet = useMemo(() => new Set(activeCompareIds), [activeCompareIds])
   const comparedRows = useMemo(
     () =>
       activeCompareIds
-        .map((id) => validRows.find((row) => row.id === id))
+        .map((id) => validRowById.get(id))
         .filter((row): row is SessionRow => row !== undefined),
-    [activeCompareIds, validRows],
+    [activeCompareIds, validRowById],
   )
   useEffect(() => {
     setWorkspace('all')
@@ -166,14 +266,17 @@ export function Overview({
     setCompareIds([])
   }, [pageIndex])
 
-  const toggleCompare = (id: string): void => {
-    setCompareIds((previous) => {
-      const scoped = previous.filter((entry) => validRows.some((row) => row.id === entry))
-      if (scoped.includes(id)) return scoped.filter((entry) => entry !== id)
-      if (scoped.length >= 3) return [...scoped.slice(1), id]
-      return [...scoped, id]
-    })
-  }
+  const toggleCompare = useCallback(
+    (id: string): void => {
+      setCompareIds((previous) => {
+        const scoped = previous.filter((entry) => validRowById.has(entry))
+        if (scoped.includes(id)) return scoped.filter((entry) => entry !== id)
+        if (scoped.length >= 3) return [...scoped.slice(1), id]
+        return [...scoped, id]
+      })
+    },
+    [validRowById],
+  )
 
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
@@ -799,99 +902,18 @@ export function Overview({
           <p className="ch-note">{t('emptyList')}</p>
         ) : (
           <div className="ch-ov-grid">
-            {visible.map((row) => {
-              const usage = usageById.get(row.id) ?? null
-              const occ = occupancyOf(usage)
-              const ws = workspaceLabelOf(row.cwd)
-              const rel = relationLabel(row, t)
-              const cacheRate = usage?.cacheHitRatePercent ?? usage?.sessionCacheHitRatePercent
-              const isCompared = activeCompareIds.includes(row.id)
-              return (
-                <article
-                  key={row.id}
-                  className={`ch-overview-card ${selected === row.id ? 'is-selected' : ''} ${isCompared ? 'is-compared' : ''}`}
-                >
-                  <div className="ch-ov-card-head">
-                    <button
-                      type="button"
-                      className="ch-ov-card-title-btn"
-                      title={row.title || row.id}
-                      onClick={() => onSelect(row.id)}
-                    >
-                      <strong>{row.title || row.id}</strong>
-                    </button>
-                    <div className="ch-ov-card-right">
-                      {row.updatedAt !== undefined && (
-                        <span className="ch-ov-card-date">{formatDateShort(row.updatedAt)}</span>
-                      )}
-                      <button
-                        type="button"
-                        className={`ch-compare-pin ${isCompared ? 'is-active' : ''}`}
-                        aria-pressed={isCompared}
-                        title={t('compareHint')}
-                        onClick={() => toggleCompare(row.id)}
-                      >
-                        {t(isCompared ? 'compareSelected' : 'compareToggle')}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="ch-ov-card-tags">
-                    {ws && <span className="ch-meta-tag is-ws">{ws}</span>}
-                    <span className="ch-meta-tag">{row.harness ?? 'CodexHost'}</span>
-                    {selected === row.id && (
-                      <span className="ch-meta-tag is-current">{t('currentSession')}</span>
-                    )}
-                    {rel && (
-                      <span className="ch-dot-pill">
-                        <i className="is-event" />
-                        {rel}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="ch-ov-card-body"
-                    onClick={() => onSelect(row.id)}
-                  >
-                    <MiniRing
-                      percent={occ ? occ.percent : null}
-                      used={occ?.used}
-                      noLabel={t('noTelemetryYet')}
-                    />
-                    <div className="ch-ov-kv">
-                      <div className="ch-ov-kv-row">
-                        <span>{t('context')}</span>
-                        <b>
-                          {occ?.used !== undefined && occ.capacity !== undefined
-                            ? `${fmt(occ.used)} / ${fmt(occ.capacity)}`
-                            : occ
-                              ? `${occ.percent.toFixed(1)}%`
-                              : '—'}
-                        </b>
-                      </div>
-                      <div className="ch-ov-kv-row">
-                        <span>{t('total')}</span>
-                        <b>{fmt(usage?.totalTokens)}</b>
-                      </div>
-                      <div className="ch-ov-kv-row">
-                        <span>{t('cost')}</span>
-                        <b>
-                          {usage?.totalCostUsd === undefined
-                            ? '—'
-                            : `${(usage.unpricedModels?.length ?? 0) > 0 ? '≥ ' : ''}${formatUsd(usage.totalCostUsd)}`}
-                        </b>
-                      </div>
-                      <div className="ch-ov-kv-row">
-                        <span>
-                          {usage?.cacheHitRatePercent !== undefined ? t('cacheHit') : t('avgCache')}
-                        </span>
-                        <b>{cacheRate === undefined ? '—' : `${cacheRate.toFixed(1)}%`}</b>
-                      </div>
-                    </div>
-                  </button>
-                </article>
-              )
-            })}
+            {visible.map((row) => (
+              <OverviewSessionCard
+                key={row.id}
+                row={row}
+                usage={usageById.get(row.id) ?? null}
+                isSelected={selected === row.id}
+                isCompared={activeCompareSet.has(row.id)}
+                onSelect={onSelect}
+                onToggleCompare={toggleCompare}
+                t={t}
+              />
+            ))}
           </div>
         )}
 
@@ -922,4 +944,4 @@ export function Overview({
       </section>
     </div>
   )
-}
+})

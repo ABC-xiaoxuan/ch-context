@@ -611,3 +611,22 @@ test('history rejects cross-session records, overlapping pages and invalid calle
   await assert.rejects(client.inspectUsage('', signal()), /thread id/)
   assert.equal(calls.length, 0)
 })
+
+test('historySince skips session/page when asOfSeq is unchanged and fetches when it changes', async () => {
+  const unchanged = historyFixture([event(1), event(2)], false, 12)
+  assert.equal(await unchanged.client.historySince('session-a', signal(), 12), null)
+  assert.deepEqual(
+    unchanged.calls.map((call) => call.path),
+    ['api/session/projections'],
+  )
+  const advanced = historyFixture([event(11), event(13)], true, 13)
+  const page = await advanced.client.historySince('session-a', signal(), 12)
+  assert.ok(page)
+  assert.equal(page.throughSeq, 13)
+  assert.deepEqual(
+    advanced.calls.map((call) => call.path),
+    ['api/session/projections', 'api/session/page'],
+  )
+  await assert.rejects(advanced.client.historySince('', signal(), 12), /session id/)
+  await assert.rejects(advanced.client.historySince('session-a', signal(), -1), /throughSeq/)
+})

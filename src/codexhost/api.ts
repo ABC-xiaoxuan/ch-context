@@ -356,6 +356,23 @@ export class CodexHostClient {
     return result
   }
 
+  async historySince(
+    sessionId: string,
+    signal: AbortSignal,
+    knownThroughSeq: number,
+  ): Promise<HistoryPage | null> {
+    identity(sessionId, 'session id')
+    sequence(knownThroughSeq, 'throughSeq')
+    const baseline = object(
+      await this.sessionRpc('session/projections', { sessionId }, signal),
+      'projection baseline',
+    )
+    object(baseline.values, 'projection baseline values')
+    const asOfSeq = sequence(baseline.asOfSeq, 'projection baseline asOfSeq')
+    if (asOfSeq === knownThroughSeq) return null
+    return this.history(sessionId, signal, undefined, asOfSeq)
+  }
+
   async history(
     sessionId: string,
     signal: AbortSignal,

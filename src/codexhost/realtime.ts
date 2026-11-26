@@ -40,10 +40,11 @@ export function observeUsageChanges(
           if (chunk.done) break
           pending += decoder.decode(chunk.value, { stream: true })
           if (pending.length > 1024 * 1024) throw new Error('Event frame too large')
+          let start = 0
           let newline: number
-          while ((newline = pending.indexOf('\n')) !== -1) {
-            const line = pending.slice(0, newline).trim()
-            pending = pending.slice(newline + 1)
+          while ((newline = pending.indexOf('\n', start)) !== -1) {
+            const line = pending.slice(start, newline).trim()
+            start = newline + 1
             if (!line) continue
             try {
               if (isUsageInvalidation(JSON.parse(line), threadId)) invalidate()
@@ -51,6 +52,7 @@ export function observeUsageChanges(
               continue
             }
           }
+          if (start > 0) pending = pending.slice(start)
         }
       } finally {
         await reader.cancel().catch(() => undefined)

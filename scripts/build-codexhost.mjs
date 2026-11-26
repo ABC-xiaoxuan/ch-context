@@ -1,8 +1,18 @@
-import { build } from 'esbuild'
+import { build, transform } from 'esbuild'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 await mkdir(new URL('../lib/', import.meta.url), { recursive: true })
+const minifyCssText = {
+  name: 'minify-css-text',
+  setup(pluginBuild) {
+    pluginBuild.onLoad({ filter: /\.css$/ }, async (args) => {
+      const raw = (await readFile(args.path, 'utf8')).replace(/\r\n/g, '\n')
+      const { code } = await transform(raw, { loader: 'css', minify: true })
+      return { contents: code, loader: 'text' }
+    })
+  },
+}
 const output = await build({
   entryPoints: ['src/codexhost/index.tsx'],
   bundle: true,
@@ -12,7 +22,7 @@ const output = await build({
   target: 'es2022',
   jsx: 'automatic',
   external: ['react', 'react/jsx-runtime', 'react-dom'],
-  loader: { '.css': 'text' },
+  plugins: [minifyCssText],
   define: {
     'process.env.NODE_ENV': '"production"',
     __CH_CONTEXT_VERSION__: JSON.stringify(pkg.version),
