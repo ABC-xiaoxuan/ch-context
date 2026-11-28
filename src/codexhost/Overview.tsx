@@ -223,6 +223,7 @@ export const Overview = memo(function Overview({
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('recent')
   const [compareIds, setCompareIds] = useState<string[]>([])
+  const [hoverTokenKey, setHoverTokenKey] = useState<string | null>(null)
   const [csvState, setCsvState] = useState<'idle' | 'downloaded' | 'failed'>('idle')
   const [mdState, setMdState] = useState<'idle' | 'copied' | 'failed'>('idle')
 
@@ -271,6 +272,7 @@ export const Overview = memo(function Overview({
     setHighOnly(false)
     setRelationsOnly(false)
     setCompareIds([])
+    setHoverTokenKey(null)
   }, [pageIndex])
   useEffect(() => {
     setCsvState('idle')
@@ -363,6 +365,11 @@ export const Overview = memo(function Overview({
     return []
   }, [stats.tokenSummary, t])
 
+  const activeHoverToken =
+    hoverTokenKey !== null && tokenSegments.some((seg) => seg.key === hoverTokenKey)
+      ? hoverTokenKey
+      : null
+
   return (
     <div className="ch-overview">
       {!hasSelected && (
@@ -411,7 +418,9 @@ export const Overview = memo(function Overview({
           </div>
           <div className="ch-ov-kpi">
             <small>{t('avgCacheHitLabel')}</small>
-            <strong>{stats.avgCacheHit === null ? '—' : `${stats.avgCacheHit.toFixed(1)}%`}</strong>
+            <strong className={stats.avgCacheHit !== null ? 'is-teal' : ''}>
+              {stats.avgCacheHit === null ? '—' : `${stats.avgCacheHit.toFixed(1)}%`}
+            </strong>
             <div className="ch-ov-sub">
               {stats.cacheHitCount > 0 ? `${stats.cacheHitCount} ${t('inspectedCount')}` : t('unavailable')}
             </div>
@@ -547,14 +556,28 @@ export const Overview = memo(function Overview({
           ) : (
             <div className="ch-token-layout">
               <Donut
-                size={84}
+                size={92}
                 segments={tokenSegments}
                 centerTop={fmt(stats.tokenSummary.sum)}
                 centerSub={t('inputOutput')}
+                hoverKey={activeHoverToken}
+                onHoverKey={setHoverTokenKey}
               />
-              <div className="ch-sl-grid">
+              <div className={`ch-sl-grid ${activeHoverToken !== null ? 'is-dim' : ''}`}>
                 {tokenSegments.map((seg) => (
-                  <div key={seg.key} className="ch-sl-item is-static">
+                  <button
+                    key={seg.key}
+                    type="button"
+                    className={`ch-sl-item ${activeHoverToken === seg.key ? 'is-hi' : ''}`}
+                    aria-pressed={activeHoverToken === seg.key}
+                    onMouseEnter={() => setHoverTokenKey(seg.key)}
+                    onMouseLeave={() => setHoverTokenKey(null)}
+                    onFocus={() => setHoverTokenKey(seg.key)}
+                    onBlur={() => setHoverTokenKey(null)}
+                    onClick={() =>
+                      setHoverTokenKey((cur) => (cur === seg.key ? null : seg.key))
+                    }
+                  >
                     <span className="ch-sl-top">
                       <span className="ch-swatch" style={{ background: seg.color }} />
                       <span className="ch-sl-label">{seg.label}</span>
@@ -565,7 +588,7 @@ export const Overview = memo(function Overview({
                       </b>
                     </span>
                     <span className="ch-sl-sub">{fmt(seg.value)}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>

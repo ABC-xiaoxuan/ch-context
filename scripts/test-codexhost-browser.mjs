@@ -257,6 +257,47 @@ try {
   await page.getByRole('button', { name: 'Find in record', exact: true }).click()
   await page.getByRole('button', { name: 'Toggle character-volume treemap', exact: true }).click()
   await page.locator('.ch-map-block').first().waitFor()
+  await page.locator('.ch-activity-timeline').getByRole('button', { name: 'DNA', exact: true }).click()
+  assert.equal(
+    await page
+      .locator('.ch-activity-timeline')
+      .getByRole('button', { name: 'DNA', exact: true })
+      .getAttribute('aria-pressed'),
+    'true',
+  )
+  await page.locator('.ch-activity-timeline').getByRole('button', { name: 'Delta', exact: true }).click()
+  assert.equal(
+    await page
+      .locator('.ch-activity-timeline')
+      .getByRole('button', { name: 'Delta', exact: true })
+      .getAttribute('aria-pressed'),
+    'true',
+  )
+  await page.locator('.ch-activity-timeline').getByRole('button', { name: 'Turn', exact: true }).click()
+  assert.equal(
+    await page
+      .locator('.ch-activity-timeline')
+      .getByRole('button', { name: 'Turn', exact: true })
+      .getAttribute('aria-pressed'),
+    'true',
+  )
+  await page.locator('.ch-activity-timeline').getByRole('button', { name: 'Step', exact: true }).click()
+  await page.locator('.ch-ms-head').first().click()
+  await page.locator('.ch-browser-card').getByRole('button', { name: 'DNA split', exact: true }).click()
+  await page.locator('.ch-br-propbar.is-dna').waitFor()
+  await page.locator('.ch-browser-card').getByRole('button', { name: 'Split', exact: true }).click()
+  await page.locator('.ch-split-browser .ch-split-right .ch-record-detail').waitFor()
+  await page.setViewportSize({ width: 1280, height: 1100 })
+  await page.evaluate(() => document.body.setAttribute('data-ds-dark-theme', ''))
+  await page.locator('.ch-activity-timeline').scrollIntoViewIfNeeded()
+  await page.waitForTimeout(150)
+  await page.screenshot({ path: `${directory}/v05-modes-dark-1280.png` })
+  await page.evaluate(() => document.body.removeAttribute('data-ds-dark-theme'))
+  await page.setViewportSize({ width: 1440, height: 1100 })
+  await page.locator('.ch-browser-card').getByRole('button', { name: 'Categories', exact: true }).click()
+  await page.locator('.ch-browser-card').getByRole('button', { name: 'DNA split', exact: true }).click()
+  await page.locator('.ch-activity-timeline').getByRole('button', { name: 'Total', exact: true }).click()
+  await page.locator('.ch-activity-timeline').getByRole('button', { name: 'DNA', exact: true }).click()
   await page.getByRole('button', { name: 'Toggle character-volume treemap', exact: true }).click()
   await page.getByRole('button', { name: 'Refresh', exact: true }).click()
   await page.waitForFunction(
@@ -266,6 +307,18 @@ try {
   )
   await page.getByRole('tab', { name: 'Overview', exact: true }).click()
   await page.locator('.ch-overview-card').filter({ hasText: '52.0%' }).waitFor()
+  await page.setViewportSize({ width: 1280, height: 1100 })
+  await page.evaluate(() => {
+    window.chFixture.setLocale('zh')
+    document.body.setAttribute('data-ds-dark-theme', '')
+  })
+  await page.waitForTimeout(150)
+  await page.screenshot({ path: `${directory}/overview-dark-1280.png` })
+  await page.evaluate(() => {
+    window.chFixture.setLocale('en')
+    document.body.removeAttribute('data-ds-dark-theme')
+  })
+  await page.setViewportSize({ width: 1440, height: 1100 })
   const rpcCountAfterFirstOverview = await page.evaluate(
     () => window.chFixture.requests.filter((request) => request.path.endsWith('ch/v1/rpc')).length,
   )

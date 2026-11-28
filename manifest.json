@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "ch-context",
   "name": { "en": "Context Insights", "zh-CN": "上下文洞察" },
-  "version": "0.4.1",
+  "version": "1.0.0",
   "description": {
     "en": "Read-only context, usage and conversation inspection for CodexHost Web.",
     "zh-CN": "在 CodexHost Web 中只读查看上下文、用量、消息、工具与文件活动。"

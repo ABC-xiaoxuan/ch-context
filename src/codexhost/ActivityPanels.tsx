@@ -1,48 +1,45 @@
 import { memo, useMemo, useState, type MouseEvent, type ReactElement } from 'react'
 import { fmt, fmtTime } from '../client/format.ts'
 import type { HistoryItem } from './api.ts'
-import type { RelatedSession } from './relationships.ts'
-import type { Translate } from './i18n.ts'
 import { Card } from './components.tsx'
-import { previewLine } from './format.ts'
 import { eventIndexAt, eventX } from './event-geometry.ts'
+import { previewLine } from './format.ts'
+import type { Translate } from './i18n.ts'
 import { occupancyOf, type Usage } from './model.ts'
+import type { RelatedSession } from './relationships.ts'
+import {
+  buildTimelineModel,
+  KIND_ORDER,
+  type TimelineGranularity,
+  type TimelineMilestoneKind,
+  type TimelineScaleMode,
+} from './timeline-model.ts'
 
-export const ROLE_COLOR = {
+export const ROLE_COLOR: Record<HistoryItem['kind'], string> = {
   user: 'var(--ch-green)',
   assistant: 'var(--ch-blue)',
   tool: 'var(--ch-teal)',
   event: 'var(--ch-purple)',
 }
 
-interface TurnSpan {
-  turn: number
-  start: number
-  end: number
-}
+const PLOT_TOP = 10
+const PLOT_BOTTOM = 136
+const PLOT_SPAN = PLOT_BOTTOM - PLOT_TOP
 
-function computeTurns(items: readonly HistoryItem[]): {
-  turns: TurnSpan[]
-  turnByIndex: number[]
-} {
-  const turns: TurnSpan[] = []
-  const turnByIndex: number[] = []
-  let current = 0
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index]
-    if (item.kind === 'user' || current === 0) current += 1
-    turnByIndex.push(current)
-    const last = turns.at(-1)
-    if (!last || last.turn !== current) turns.push({ turn: current, start: index, end: index })
-    else last.end = index
+function MilestoneGlyph({ kind }: { kind: TimelineMilestoneKind }): ReactElement {
+  if (kind === 'error') {
+    return (
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.1" aria-hidden="true">
+        <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
+      </svg>
+    )
   }
-  return { turns, turnByIndex }
-}
-
-const LANES = ['user', 'assistant', 'tool', 'event'] as const
-
-function laneY(kind: HistoryItem['kind']): number {
-  return 26 + LANES.indexOf(kind) * 25
+  return (
+    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M3 11l4-4 3 3 4-5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 5h4v4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }
 
 export const ActivityTimeline = memo(function ActivityTimeline({
@@ -53,6 +50,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   loading,
   focus,
   onFocus,
+  onRevealBrowser,
   t,
 }: {
   items: readonly HistoryItem[]
@@ -62,156 +60,270 @@ export const ActivityTimeline = memo(function ActivityTimeline({
   loading: boolean
   focus?: string
   onFocus: (id: string) => void
+  onRevealBrowser?: (id: string) => void
   t: Translate
 }): ReactElement {
-  const [hover, setHover] = useState<number | null>(null)
+  const [hoverBucketIdx, setHoverBucketIdx] = useState<number | null>(null)
+  const [dnaMode, setDnaMode] = useState(false)
+  const [granularity, setGranularity] = useState<TimelineGranularity>('step')
+  const [scaleMode, setScaleMode] = useState<TimelineScaleMode>('total')
+  const [activeTurnFilter, setActiveTurnFilter] = useState<number | null>(null)
+  const [hoverKind, setHoverKind] = useState<HistoryItem['kind'] | null>(null)
+
   const indexById = useMemo(() => new Map(items.map((item, idx) => [item.id, idx])), [items])
-  const selected = focus !== undefined ? (indexById.get(focus) ?? -1) : -1
-  const effective = selected < 0 ? Math.max(0, items.length - 1) : selected
-  const indexAt = (event: MouseEvent<SVGSVGElement>): number | null => {
+  const model = useMemo(
+    () => buildTimelineModel(items, granularity, dnaMode),
+    [items, granularity, dnaMode],
+  )
+  const buckets = model.buckets
+  const isDelta = scaleMode === 'delta'
+  const maxVal = Math.max(1, isDelta ? model.maxDelta : model.maxTotal)
+
+  const selectedRecordIdx = focus !== undefined ? (indexById.get(focus) ?? -1) : -1
+  const effectiveRecordIdx = selectedRecordIdx < 0 ? Math.max(0, items.length - 1) : selectedRecordIdx
+
+  const effectiveBucketIdx = useMemo(() => {
+    if (buckets.length === 0) return 0
+    if (granularity === 'step') return Math.min(buckets.length - 1, Math.max(0, effectiveRecordIdx))
+    const found = buckets.findIndex(
+      (bucket) => effectiveRecordIdx >= bucket.startIndex && effectiveRecordIdx <= bucket.endIndex,
+    )
+    return found < 0 ? buckets.length - 1 : found
+  }, [buckets, granularity, effectiveRecordIdx])
+
+  const validHoverIdx =
+    hoverBucketIdx !== null && hoverBucketIdx >= 0 && hoverBucketIdx < buckets.length
+      ? hoverBucketIdx
+      : null
+  const previewBucketIdx = validHoverIdx ?? effectiveBucketIdx
+  const previewBucket = buckets[previewBucketIdx]
+  const preview =
+    granularity === 'step'
+      ? items[previewBucketIdx]
+      : (previewBucket?.item ?? items[effectiveRecordIdx])
+  const previewRecordIdx = preview ? (indexById.get(preview.id) ?? effectiveRecordIdx) : effectiveRecordIdx
+
+  const bucketIndexAt = (event: MouseEvent<SVGSVGElement>): number | null => {
+    if (buckets.length === 0) return null
     const bounds = event.currentTarget.getBoundingClientRect()
     return bounds.width > 0
-      ? eventIndexAt((event.clientX - bounds.left) / bounds.width, items.length)
+      ? eventIndexAt((event.clientX - bounds.left) / bounds.width, buckets.length)
       : null
   }
   const pick = (event: MouseEvent<SVGSVGElement>): void => {
-    const index = indexAt(event)
-    if (index !== null && items[index]) onFocus(items[index].id)
+    const idx = bucketIndexAt(event)
+    const bucket = idx !== null ? buckets[idx] : undefined
+    if (bucket) onFocus(bucket.recordId)
   }
-  const xOf = (index: number) => eventX(index, items.length)
-  const markerWidth = Math.max(3.5, Math.min(10, 560 / Math.max(1, items.length)))
-  const previewIndex = hover !== null && items[hover] ? hover : effective
-  const preview = items[previewIndex]
-  const { turns, turnByIndex } = useMemo(() => computeTurns(items), [items])
-  const turnByNumber = useMemo(() => new Map(turns.map((span) => [span.turn, span])), [turns])
-  const bridges = useMemo(() => {
-    const list: { key: string; x1: number; x2: number; isError: boolean }[] = []
-    for (let index = 0; index < items.length; index++) {
-      const item = items[index]
-      if (item.eventType !== 'tool/call') continue
-      const partnerId = pairs.get(item.id)
-      if (!partnerId) continue
-      const targetIndex = indexById.get(partnerId)
-      if (targetIndex === undefined || targetIndex <= index) continue
-      const result = items[targetIndex]
-      list.push({
-        key: `${item.id}-${partnerId}`,
-        x1: eventX(index, items.length),
-        x2: eventX(targetIndex, items.length),
-        isError: result?.isError === true || item.isError === true,
-      })
-    }
-    return list
-  }, [items, pairs, indexById])
-  const staticPlot = useMemo(
-    () => (
-      <>
-        {turns.map((turn, turnIndex) => {
-          const x1 =
-            turnIndex === 0
-              ? 0
-              : (eventX(turn.start - 1, items.length) + eventX(turn.start, items.length)) / 2
-          const x2 =
-            turnIndex === turns.length - 1
-              ? 720
-              : (eventX(turn.end, items.length) + eventX(turn.end + 1, items.length)) / 2
-          return (
-            <g key={turn.turn}>
-              {turnIndex % 2 === 1 && (
-                <rect
-                  x={x1}
-                  y={2}
-                  width={Math.max(0, x2 - x1)}
-                  height={116}
-                  rx={4}
-                  className="ch-turn-band"
-                />
-              )}
-              {turnIndex > 0 && (
-                <line x1={x1} x2={x1} y1={4} y2={116} className="ch-turn-divider" />
-              )}
-            </g>
-          )
-        })}
-        {LANES.map((lane) => (
-          <line
-            key={lane}
-            x1="0"
-            x2="720"
-            y1={laneY(lane)}
-            y2={laneY(lane)}
-            className="ch-lane-line"
-          />
-        ))}
-        {bridges.map((bridge) => (
-          <line
-            key={bridge.key}
-            x1={bridge.x1}
-            x2={bridge.x2}
-            y1={laneY('tool')}
-            y2={laneY('tool')}
-            className={`ch-tool-bridge ${bridge.isError ? 'is-error' : ''}`}
-          />
-        ))}
-        {items.map((item, index) => {
-          const cx = eventX(index, items.length)
-          const y = laneY(item.kind) - 8
-          const fill = item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[item.kind]
-          const dimmed = matchedIds !== undefined && !matchedIds.has(item.id)
-          return (
-            <g key={item.id}>
-              <rect
-                x={cx - markerWidth / 2}
-                y={y}
-                width={markerWidth}
-                height={16}
-                rx="2.5"
-                fill={fill}
-                opacity={dimmed ? 0.16 : matchedIds !== undefined ? 0.94 : 0.76}
-              />
-              {item.isError === true && (
-                <rect
-                  x={cx - 4}
-                  y={4}
-                  width={8}
-                  height={8}
-                  rx={4}
-                  fill="var(--ch-danger)"
-                  opacity={dimmed ? 0.2 : 1}
-                />
-              )}
-            </g>
-          )
-        })}
-      </>
-    ),
-    [items, turns, bridges, markerWidth, matchedIds],
+
+  const xOf = (idx: number): number => eventX(idx, buckets.length)
+  const barWidth = Math.max(2.6, Math.min(13.5, (690 / Math.max(1, buckets.length)) * 0.78))
+
+  const activeTurn = previewBucket?.turn ?? model.turnByRecordIndex[previewRecordIdx] ?? 1
+  const showTurnRibbon = model.turns.length >= 2 && model.turns.length <= 24
+  const turnFilterValid =
+    showTurnRibbon &&
+    activeTurnFilter !== null &&
+    model.turns.some((span) => span.turn === activeTurnFilter)
+      ? activeTurnFilter
+      : null
+  const activeTurnSpan = useMemo(
+    () => model.turns.find((span) => span.turn === activeTurn),
+    [model.turns, activeTurn],
   )
-  const previewPairId = preview ? pairs.get(preview.id) : undefined
-  const previewPair = previewPairId ? items[indexById.get(previewPairId) ?? -1] : undefined
-  const activeTurn = turnByIndex[previewIndex] ?? 1
-  const activeTurnSpan = turnByNumber.get(activeTurn)
   const turnUserRecord = useMemo(() => {
     if (!activeTurnSpan) return undefined
-    for (let idx = activeTurnSpan.start; idx <= activeTurnSpan.end; idx++) {
+    for (let idx = activeTurnSpan.startIndex; idx <= activeTurnSpan.endIndex; idx++) {
       if (items[idx]?.kind === 'user') return items[idx]
     }
     return undefined
   }, [activeTurnSpan, items])
   const turnReplyRecord = useMemo(() => {
     if (!activeTurnSpan) return undefined
-    for (let idx = activeTurnSpan.end; idx >= activeTurnSpan.start; idx--) {
+    for (let idx = activeTurnSpan.endIndex; idx >= activeTurnSpan.startIndex; idx--) {
       if (items[idx]?.kind === 'assistant') return items[idx]
     }
     return undefined
   }, [activeTurnSpan, items])
-  const sliderPercent = items.length > 1 ? (effective / (items.length - 1)) * 100 : 100
-  const highlightIndices =
-    hover !== null && hover !== effective && items[hover]
-      ? [effective, hover]
-      : items[effective]
-        ? [effective]
-        : []
+
+  const previewPairId = preview ? pairs.get(preview.id) : undefined
+  const previewPair = previewPairId ? items[indexById.get(previewPairId) ?? -1] : undefined
+  const sliderPercent = items.length > 1 ? (effectiveRecordIdx / (items.length - 1)) * 100 : 100
+
+  const yTicks = useMemo(
+    () =>
+      [1, 0.75, 0.5, 0.25, 0].map((fraction, idx) => {
+        const value = Math.round(maxVal * fraction)
+        const text = value === 0 ? '0' : `${isDelta ? '+' : ''}${fmt(value)}`
+        return { key: idx, topPct: ((PLOT_TOP + idx * (PLOT_SPAN / 4)) / 140) * 100, text }
+      }),
+    [maxVal, isDelta],
+  )
+
+  const previewBreakdown = previewBucket
+    ? isDelta
+      ? previewBucket.deltaByKind
+      : previewBucket.totalByKind
+    : null
+  const previewBreakdownSum = previewBreakdown
+    ? Object.values(previewBreakdown).reduce((sum, v) => sum + v, 0)
+    : 0
+  const activeHoverKind = hoverKind !== null && previewBreakdownSum > 0 ? hoverKind : null
+
+  const barsSvg = useMemo(() => {
+    return (
+      <>
+        {[0, 1, 2, 3, 4].map((idx) => {
+          const y = PLOT_TOP + idx * (PLOT_SPAN / 4)
+          return (
+            <line
+              key={idx}
+              x1="0"
+              x2="720"
+              y1={y}
+              y2={y}
+              className={idx === 4 ? 'ch-tl-zero-line' : 'ch-lane-line'}
+            />
+          )
+        })}
+        {model.turns.map((turn, turnIndex) => {
+          if (turnIndex % 2 !== 1 || buckets.length === 0) return null
+          const startB = granularity === 'step' ? turn.startIndex : turnIndex
+          const endB = granularity === 'step' ? turn.endIndex : turnIndex
+          const x1 =
+            startB === 0 ? 0 : (eventX(startB - 1, buckets.length) + eventX(startB, buckets.length)) / 2
+          const x2 =
+            endB === buckets.length - 1
+              ? 720
+              : (eventX(endB, buckets.length) + eventX(endB + 1, buckets.length)) / 2
+          return (
+            <rect
+              key={`band-${turn.turn}`}
+              x={x1}
+              y={PLOT_TOP}
+              width={Math.max(0, x2 - x1)}
+              height={PLOT_SPAN}
+              rx={3}
+              className="ch-turn-band"
+            />
+          )
+        })}
+        {buckets.map((bucket) => {
+          const cx = eventX(bucket.index, buckets.length)
+          const value = isDelta ? bucket.deltaChars : bucket.totalChars
+          const baseY = PLOT_BOTTOM
+          const inTurn = turnFilterValid === null || bucket.turn === turnFilterValid
+          const matchesFilter =
+            matchedIds === undefined ||
+            (granularity === 'step'
+              ? matchedIds.has(bucket.recordId)
+              : items
+                  .slice(bucket.startIndex, bucket.endIndex + 1)
+                  .some((entry) => matchedIds.has(entry.id)))
+          const groupOpacity = !inTurn || !matchesFilter ? 0.2 : 1
+          const x = cx - barWidth / 2
+
+          if (value <= 0) {
+            return (
+              <rect
+                key={bucket.key}
+                x={x}
+                y={baseY - 3}
+                width={barWidth}
+                height={3}
+                rx={1}
+                fill={bucket.item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[bucket.item.kind]}
+                opacity={groupOpacity * 0.55}
+              />
+            )
+          }
+
+          const barH = Math.min(PLOT_SPAN, Math.max(4, (value / maxVal) * PLOT_SPAN))
+          const barTop = baseY - barH
+
+          if (dnaMode) {
+            const runs = isDelta ? bucket.dnaDelta : bucket.dnaCumulative
+            const runSum = runs.reduce((sum, run) => sum + run.chars, 0) || 1
+            let acc = 0
+            let prevY = baseY
+            return (
+              <g key={bucket.key} opacity={groupOpacity}>
+                {runs.map((run, runIdx) => {
+                  acc += run.chars
+                  const nextY =
+                    runIdx === runs.length - 1
+                      ? barTop
+                      : Math.max(barTop, barTop + ((runSum - acc) / runSum) * barH)
+                  const drawH = Math.max(0, prevY - nextY)
+                  prevY = nextY
+                  if (drawH <= 0) return null
+                  const dimmed = activeHoverKind !== null && run.kind !== activeHoverKind
+                  return (
+                    <rect
+                      key={runIdx}
+                      x={x}
+                      y={nextY}
+                      width={barWidth}
+                      height={Math.min(drawH + 0.2, baseY - nextY)}
+                      fill={run.isError ? 'var(--ch-danger)' : ROLE_COLOR[run.kind]}
+                      opacity={dimmed ? 0.24 : 0.94}
+                    />
+                  )
+                })}
+              </g>
+            )
+          }
+
+          const byKind = isDelta ? bucket.deltaByKind : bucket.totalByKind
+          const sum = Object.values(byKind).reduce((acc, v) => acc + v, 0) || 1
+          const activeKinds = KIND_ORDER.filter((kind) => byKind[kind] > 0)
+          let acc = 0
+          let prevY = baseY
+          return (
+            <g key={bucket.key} opacity={groupOpacity}>
+              {activeKinds.map((kind, kindIdx) => {
+                acc += byKind[kind]
+                const nextY =
+                  kindIdx === activeKinds.length - 1
+                    ? barTop
+                    : Math.max(barTop, barTop + ((sum - acc) / sum) * barH)
+                const drawH = Math.max(0, prevY - nextY)
+                prevY = nextY
+                if (drawH <= 0) return null
+                const dimmed = activeHoverKind !== null && kind !== activeHoverKind
+                const isErrBar = isDelta && granularity === 'step' && bucket.item.isError === true
+                return (
+                  <rect
+                    key={kind}
+                    x={x}
+                    y={nextY}
+                    width={barWidth}
+                    height={Math.min(drawH + 0.2, baseY - nextY)}
+                    rx={barWidth > 7 ? 1 : 0}
+                    fill={isErrBar ? 'var(--ch-danger)' : ROLE_COLOR[kind]}
+                    opacity={dimmed ? 0.24 : 0.92}
+                  />
+                )
+              })}
+            </g>
+          )
+        })}
+      </>
+    )
+  }, [
+    buckets,
+    model.turns,
+    granularity,
+    isDelta,
+    maxVal,
+    turnFilterValid,
+    matchedIds,
+    items,
+    barWidth,
+    dnaMode,
+    activeHoverKind,
+  ])
+
   return (
     <Card
       title={t('activityTimeline')}
@@ -223,9 +335,53 @@ export const ActivityTimeline = memo(function ActivityTimeline({
               {t('filteredTimelineHint')} · <b>{matchedIds.size}</b>
             </span>
           )}
+          <button
+            type="button"
+            className={`ch-mini-button ch-tl-dna-btn ${dnaMode ? 'is-active' : ''}`}
+            aria-pressed={dnaMode}
+            onClick={() => setDnaMode((value) => !value)}
+          >
+            {t('dnaMode')}
+          </button>
+          <div className="ch-seg" role="group" aria-label={t('turnsLabel')}>
+            <button
+              type="button"
+              className={granularity === 'step' ? 'is-active' : ''}
+              aria-pressed={granularity === 'step'}
+              onClick={() => setGranularity('step')}
+            >
+              {t('granStep')}
+            </button>
+            <button
+              type="button"
+              className={granularity === 'turn' ? 'is-active' : ''}
+              aria-pressed={granularity === 'turn'}
+              onClick={() => setGranularity('turn')}
+            >
+              {t('granTurn')}
+            </button>
+          </div>
+          <div className="ch-seg" role="group" aria-label={t('scaleModeLabel')}>
+            <button
+              type="button"
+              className={scaleMode === 'total' ? 'is-active' : ''}
+              aria-pressed={scaleMode === 'total'}
+              onClick={() => setScaleMode('total')}
+            >
+              {t('modeTotal')}
+            </button>
+            <button
+              type="button"
+              className={scaleMode === 'delta' ? 'is-active' : ''}
+              aria-pressed={scaleMode === 'delta'}
+              onClick={() => setScaleMode('delta')}
+            >
+              {t('modeDelta')}
+            </button>
+          </div>
           <span className="ch-card-rate">
             {items.length ? `${items.length}` : '—'} {t('count')}
-            {turns.length > 0 ? ` · ${turns.length} ${t('turnsCount')}` : ''}
+            {model.turns.length > 0 ? ` · ${model.turns.length} ${t('turnsCount')}` : ''}
           </span>
         </div>
       }
@@ -236,98 +392,177 @@ export const ActivityTimeline = memo(function ActivityTimeline({
         </p>
       ) : (
         <>
-          <div className="ch-activity-chart">
-            <div className="ch-lane-labels">
-              {LANES.map((lane) => (
-                <span key={lane} className="ch-lane-label">
-                  <i style={{ background: ROLE_COLOR[lane] }} />
-                  {t(lane)}
+          <div className="ch-activity-chart ch-tl-v3-chart">
+            <div className="ch-tl-yaxis" aria-hidden="true">
+              {yTicks.map((tick) => (
+                <span key={tick.key} style={{ top: `${tick.topPct.toFixed(1)}%` }}>
+                  {tick.text}
                 </span>
               ))}
             </div>
             <div className="ch-activity-plot">
-              {turns.length > 0 && turns.length <= 16 && (
-                <div className="ch-turn-axis" aria-hidden="true">
-                  {turns.map((turn, turnIndex) => {
-                    const x1 = turnIndex === 0 ? 0 : (xOf(turn.start - 1) + xOf(turn.start)) / 2
-                    return (
-                      <span
-                        key={turn.turn}
-                        className="ch-turn-tag"
-                        style={{ left: `${(x1 / 720) * 100}%` }}
+              <div className="ch-tl-overlay-band">
+                {model.stepFlags.map((flagIdx) => {
+                  const bucket = buckets[flagIdx]
+                  if (!bucket) return null
+                  const leftPct = (xOf(flagIdx) / 720) * 100
+                  return (
+                    <span
+                      key={`flag-${bucket.seq}`}
+                      className="ch-tl-flag"
+                      style={{ left: `${leftPct.toFixed(2)}%` }}
+                      aria-hidden="true"
+                    >
+                      <i>#{bucket.seq}</i>
+                    </span>
+                  )
+                })}
+                {buckets.map((bucket) => {
+                  if (!bucket.milestone) return null
+                  const ms = bucket.milestone
+                  const leftPct = (xOf(bucket.index) / 720) * 100
+                  const isActivePin = previewBucket?.index === bucket.index
+                  const countSuffix = ms.count > 1 ? ` ×${ms.count}` : ''
+                  const pinLabel = `${t(ms.labelKey)}${countSuffix} · #${ms.seq} ${ms.detail}`
+                  return (
+                    <div
+                      key={`ms-${bucket.key}`}
+                      className={`ch-ms-pin is-${ms.kind} ${isActivePin ? 'is-active' : ''}`}
+                      style={{ left: `${leftPct.toFixed(2)}%` }}
+                    >
+                      <button
+                        type="button"
+                        className="ch-ms-head"
+                        title={pinLabel}
+                        aria-label={pinLabel}
+                        onClick={() => onFocus(ms.targetId)}
                       >
-                        T{turn.turn}
+                        <span className="ch-ms-badge">
+                          <MilestoneGlyph kind={ms.kind} />
+                        </span>
+                      </button>
+                      <span className="ch-ms-pole" aria-hidden="true" />
+                    </div>
+                  )
+                })}
+                {validHoverIdx !== null && previewBucket && (() => {
+                  const xPct = (xOf(validHoverIdx) / 720) * 100
+                  const tooltipStyle =
+                    xPct < 22
+                      ? { left: '0%', transform: 'none' }
+                      : xPct > 78
+                        ? { right: '0%', left: 'auto', transform: 'none' }
+                        : { left: `${xPct.toFixed(1)}%` }
+                  const turnRecords = previewBucket.endIndex - previewBucket.startIndex + 1
+                  const msBadge = previewBucket.milestone
+                    ? `[${t(previewBucket.milestone.labelKey)}${previewBucket.milestone.count > 1 ? ` ×${previewBucket.milestone.count}` : ''}] `
+                    : ''
+                  return (
+                    <div className="ch-tl-tooltip" style={tooltipStyle}>
+                      <strong>
+                        {t('turnShort')} {previewBucket.turn} ·{' '}
+                        {granularity === 'turn'
+                          ? `${turnRecords} ${t('count')}`
+                          : `#${previewBucket.seq}`}{' '}
+                        · {isDelta ? '+' : ''}
+                        {fmt(isDelta ? previewBucket.deltaChars : previewBucket.totalChars)}{' '}
+                        {t('charsUnit')}
+                      </strong>
+                      <span>
+                        {msBadge}
+                        {previewBucket.item.toolName ?? previewLine(previewBucket.item.title, 48)}
                       </span>
-                    )
-                  })}
-                </div>
-              )}
+                    </div>
+                  )
+                })()}
+              </div>
+
               <svg
-                viewBox="0 0 720 120"
+                viewBox="0 0 720 140"
                 preserveAspectRatio="none"
                 role="img"
                 aria-label={t('activitySequence')}
                 onClick={pick}
                 onMouseMove={(event) => {
-                  const next = indexAt(event)
-                  setHover((previous) => (previous === next ? previous : next))
+                  const next = bucketIndexAt(event)
+                  setHoverBucketIdx((previous) => (previous === next ? previous : next))
                 }}
-                onMouseLeave={() => setHover(null)}
+                onMouseLeave={() => setHoverBucketIdx(null)}
               >
-                {staticPlot}
-                <line
-                  x1={xOf(effective)}
-                  x2={xOf(effective)}
-                  y1="14"
-                  y2="118"
-                  className="ch-timeline-cursor"
-                />
-                {highlightIndices.map((index) => {
-                  const item = items[index]
-                  if (!item) return null
-                  const width = Math.min(12, markerWidth + 2)
-                  const fill = item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[item.kind]
-                  return (
-                    <rect
-                      key={`hi-${item.id}`}
-                      x={xOf(index) - width / 2}
-                      y={laneY(item.kind) - 10}
-                      width={width}
-                      height={20}
-                      rx="2.5"
-                      fill={fill}
-                      opacity={1}
-                    />
-                  )
-                })}
+                {barsSvg}
+                {buckets[effectiveBucketIdx] && (
+                  <line
+                    x1={xOf(effectiveBucketIdx)}
+                    x2={xOf(effectiveBucketIdx)}
+                    y1={PLOT_TOP}
+                    y2={PLOT_BOTTOM}
+                    className="ch-timeline-cursor"
+                  />
+                )}
+                {buckets[previewBucketIdx] && (
+                  <rect
+                    x={xOf(previewBucketIdx) - barWidth / 2 - 1}
+                    y={PLOT_TOP}
+                    width={barWidth + 2}
+                    height={PLOT_SPAN}
+                    rx={barWidth > 7 ? 2 : 0}
+                    className="ch-tl-active-frame"
+                  />
+                )}
               </svg>
+
+              {showTurnRibbon && (
+                <div className="ch-turn-strip ch-turn-ribbon" role="group" aria-label={t('turnsLabel')}>
+                  {model.turns.map((turn) => {
+                    const isPinned = turnFilterValid === turn.turn
+                    const isTurnActive =
+                      turnFilterValid !== null
+                        ? isPinned
+                        : turn.turn === activeTurn
+                    return (
+                      <button
+                        key={turn.turn}
+                        type="button"
+                        className={`ch-turn-pill ${isTurnActive ? 'is-active' : ''} ${isPinned ? 'is-pinned' : ''}`}
+                        aria-pressed={isPinned}
+                        style={{ flex: `${Math.max(1, turn.count)} 1 0` }}
+                        title={`${t('turnShort')} ${turn.turn} · ${turn.count} ${t('count')}`}
+                        onClick={() => {
+                          if (isPinned) {
+                            setActiveTurnFilter(null)
+                          } else {
+                            setActiveTurnFilter(turn.turn)
+                            const target = items[turn.endIndex]
+                            if (target) onFocus(target.id)
+                          }
+                        }}
+                      >
+                        T{turn.turn}
+                        {model.turns.length <= 10 ? ` · ${turn.count}` : ''}
+                      </button>
+                    )
+                  })}
+                  {turnFilterValid !== null && (
+                    <button
+                      type="button"
+                      className="ch-mini-button"
+                      onClick={() => setActiveTurnFilter(null)}
+                    >
+                      {t('clearTurnFilter')}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-          {turns.length >= 2 && turns.length <= 24 && (
-            <div className="ch-turn-strip" role="group" aria-label={t('turnsLabel')}>
-              {turns.map((turn) => (
-                <button
-                  key={turn.turn}
-                  type="button"
-                  className={`ch-turn-pill ${turn.turn === activeTurn ? 'is-active' : ''}`}
-                  title={`${t('turnShort')} ${turn.turn}`}
-                  onClick={() => {
-                    const target = items[turn.end]
-                    if (target) onFocus(target.id)
-                  }}
-                >
-                  T{turn.turn}
-                </button>
-              ))}
-            </div>
-          )}
+
           <div className="ch-scrubber-row">
             <input
               className="ch-sequence-slider"
               type="range"
               min="0"
               max={Math.max(0, items.length - 1)}
-              value={effective}
+              value={effectiveRecordIdx}
               style={{
                 background: `linear-gradient(to right, var(--ch-accent) ${sliderPercent}%, var(--ch-track) ${sliderPercent}%)`,
               }}
@@ -338,10 +573,11 @@ export const ActivityTimeline = memo(function ActivityTimeline({
               aria-label={t('activitySequence')}
             />
             <span className="ch-scrubber-pos">
-              #{effective + 1} / {items.length}
+              #{effectiveRecordIdx + 1} / {items.length}
             </span>
           </div>
-          {preview && (
+
+          {preview && previewBucket && (
             <div
               className="ch-sequence-preview"
               style={{
@@ -352,11 +588,19 @@ export const ActivityTimeline = memo(function ActivityTimeline({
               <div className="ch-step-brief-top">
                 <div className="ch-step-brief-meta">
                   <strong className="ch-sb-turn">
-                    {t('turnShort')} {activeTurn} · #{previewIndex + 1} {t('stepOf')} {items.length}
+                    {t('turnShort')} {activeTurn} · #{previewRecordIdx + 1} {t('stepOf')}{' '}
+                    {items.length}
                   </strong>
                   <b data-seq={preview.seq} title={`Seq ${preview.seq}`}>
                     #{preview.seq}
                   </b>
+                  <span className="ch-step-metric">
+                    {t('cumulativeCharsLabel')} {fmt(previewBucket.totalChars)} {t('charsUnit')}
+                  </span>
+                  <span className="ch-step-metric is-delta">
+                    {t(granularity === 'turn' ? 'turnDeltaLabel' : 'stepDeltaLabel')} +
+                    {fmt(previewBucket.deltaChars)} {t('charsUnit')}
+                  </span>
                   <span className={`ch-dot-pill ${preview.isError === true ? 'is-err' : ''}`}>
                     <i
                       style={{
@@ -366,6 +610,14 @@ export const ActivityTimeline = memo(function ActivityTimeline({
                     />
                     {preview.isError === true ? t('failed') : t(preview.kind)}
                   </span>
+                  {previewBucket.milestone && (
+                    <span
+                      className={`ch-step-metric ${previewBucket.milestone.kind === 'error' ? 'is-err' : 'is-amber'}`}
+                    >
+                      {t(previewBucket.milestone.labelKey)}
+                      {previewBucket.milestone.count > 1 ? ` ×${previewBucket.milestone.count}` : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="ch-sb-right">
                   {preview.time !== undefined && (
@@ -382,8 +634,18 @@ export const ActivityTimeline = memo(function ActivityTimeline({
                         : `${t('jumpCall')} ↖`}
                     </button>
                   )}
+                  {onRevealBrowser && (
+                    <button
+                      type="button"
+                      className="ch-mini-button is-active"
+                      onClick={() => onRevealBrowser(preview.id)}
+                    >
+                      {t('jumpToBrowserShort')} ↗
+                    </button>
+                  )}
                 </div>
               </div>
+
               <div className="ch-sb-rows">
                 {turnUserRecord && (
                   <button
@@ -424,9 +686,53 @@ export const ActivityTimeline = memo(function ActivityTimeline({
                   </button>
                 )}
               </div>
+
+              {previewBreakdown && previewBreakdownSum > 0 && (
+                <div className="ch-step-comp">
+                  <div className="ch-step-comp-bar" aria-hidden="true">
+                    {KIND_ORDER.map((kind) => {
+                      const val = previewBreakdown[kind]
+                      if (val <= 0) return null
+                      return (
+                        <div
+                          key={kind}
+                          style={{
+                            width: `${((val / previewBreakdownSum) * 100).toFixed(2)}%`,
+                            background: ROLE_COLOR[kind],
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                  <div className="ch-step-comp-leg">
+                    {KIND_ORDER.map((kind) => {
+                      const val = previewBreakdown[kind]
+                      const pct = Math.round((val / previewBreakdownSum) * 100)
+                      return (
+                        <button
+                          key={kind}
+                          type="button"
+                          className={`ch-step-leg-btn ${activeHoverKind === kind ? 'is-active' : ''}`}
+                          aria-pressed={activeHoverKind === kind}
+                          onMouseEnter={() => setHoverKind(kind)}
+                          onMouseLeave={() => setHoverKind(null)}
+                          onFocus={() => setHoverKind(kind)}
+                          onBlur={() => setHoverKind(null)}
+                          onClick={() => setHoverKind((cur) => (cur === kind ? null : kind))}
+                        >
+                          <i style={{ background: ROLE_COLOR[kind] }} />
+                          <span>{t(kind)}</span>
+                          <b>{fmt(val)}</b>
+                          <em>{pct}%</em>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-          <p className="ch-note">{t('sequenceNote')}</p>
+          <p className="ch-note">{t('timelineCharsNote')}</p>
         </>
       )}
     </Card>
@@ -507,7 +813,12 @@ export const SessionNetworkCard = memo(function SessionNetworkCard({
                   </button>
                 ))}
               </div>
-              <svg className="ch-net-connector" viewBox="0 0 600 22" preserveAspectRatio="none" aria-hidden="true">
+              <svg
+                className="ch-net-connector"
+                viewBox="0 0 600 22"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
                 <path d="M300,0 C300,11 300,11 300,22" />
               </svg>
             </>
@@ -539,7 +850,12 @@ export const SessionNetworkCard = memo(function SessionNetworkCard({
 
           {children.length > 0 && (
             <>
-              <svg className="ch-net-connector" viewBox="0 0 600 22" preserveAspectRatio="none" aria-hidden="true">
+              <svg
+                className="ch-net-connector"
+                viewBox="0 0 600 22"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
                 {children.length === 1 ? (
                   <path d="M300,0 C300,11 300,11 300,22" />
                 ) : (
@@ -583,4 +899,3 @@ export const SessionNetworkCard = memo(function SessionNetworkCard({
     </Card>
   )
 })
-

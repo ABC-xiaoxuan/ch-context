@@ -7,6 +7,7 @@ import { type ClientContext, type ViewProps } from './hooks.ts'
 import styles from './styles.css'
 import telemetryStyles from './telemetry.css'
 import overviewStyles from './overview.css'
+import timelineStyles from './timeline.css'
 import inspectorStyles from './inspector.css'
 import activityStyles from './activity.css'
 import richTextStyles from './richtext.css'
@@ -57,6 +58,8 @@ export function apply(ctx: ClientContext): void {
       telemetryStyles +
       '\n' +
       overviewStyles +
+      '\n' +
+      timelineStyles +
       '\n' +
       inspectorStyles +
       '\n' +

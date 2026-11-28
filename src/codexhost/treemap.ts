@@ -48,39 +48,16 @@ interface LaidRect<T> {
   h: number
 }
 
-function packSortedRects<T>(
-  sorted: readonly WeightedRect<T>[],
-  total: number,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-): LaidRect<T>[] {
-  if (sorted.length === 0 || total <= 0 || w <= 0 || h <= 0) return []
-  if (sorted.length === 1) return [{ item: sorted[0].item, x, y, w, h }]
-  let acc = 0
-  let split = 1
-  const half = total / 2
-  for (let index = 0; index < sorted.length - 1; index++) {
-    acc += sorted[index].weight
-    split = index + 1
-    if (acc >= half) break
-  }
-  const first = sorted.slice(0, split)
-  const rest = sorted.slice(split)
-  const ratio = acc / total
-  if (w >= h) {
-    const w1 = w * ratio
-    return [
-      ...packSortedRects(first, acc, x, y, w1, h),
-      ...packSortedRects(rest, total - acc, x + w1, y, w - w1, h),
-    ]
-  }
-  const h1 = h * ratio
-  return [
-    ...packSortedRects(first, acc, x, y, w, h1),
-    ...packSortedRects(rest, total - acc, x, y + h1, w, h - h1),
-  ]
+interface AreaEntry<T> {
+  item: T
+  area: number
+}
+
+function worstRatioStats(sum: number, minArea: number, maxArea: number, side: number): number {
+  if (sum <= 0 || minArea <= 0 || side <= 0) return Infinity
+  const sideSq = side * side
+  const sumSq = sum * sum
+  return Math.max((sideSq * maxArea) / sumSq, sumSq / (sideSq * minArea))
 }
 
 function packRects<T>(
@@ -91,10 +68,89 @@ function packRects<T>(
   h: number,
 ): LaidRect<T>[] {
   if (entries.length === 0 || w <= 0 || h <= 0) return []
-  const total = entries.reduce((sum, entry) => sum + entry.weight, 0)
-  if (total <= 0) return []
-  const sorted = [...entries].sort((a, b) => b.weight - a.weight)
-  return packSortedRects(sorted, total, x, y, w, h)
+  const positive = entries.filter((entry) => entry.weight > 0)
+  const total = positive.reduce((sum, entry) => sum + entry.weight, 0)
+  if (positive.length === 0 || total <= 0) return []
+  const sorted = [...positive].sort((a, b) => b.weight - a.weight)
+  const scale = (w * h) / total
+  const scaled: AreaEntry<T>[] = sorted.map((entry) => ({
+    item: entry.item,
+    area: entry.weight * scale,
+  }))
+  const out: LaidRect<T>[] = []
+  let cx = x
+  let cy = y
+  let cw = w
+  let ch = h
+
+  const commitRow = (row: readonly AreaEntry<T>[], sum: number): void => {
+    if (sum <= 0 || cw <= 0 || ch <= 0) return
+    if (cw >= ch) {
+      const rw = Math.min(cw, sum / ch)
+      let cursorY = cy
+      const endY = cy + ch
+      for (let i = 0; i < row.length; i++) {
+        const entry = row[i]
+        const rh =
+          i === row.length - 1
+            ? Math.max(0, endY - cursorY)
+            : Math.min(Math.max(0, endY - cursorY), (entry.area / sum) * ch)
+        out.push({ item: entry.item, x: cx, y: cursorY, w: rw, h: rh })
+        cursorY += rh
+      }
+      cx += rw
+      cw = Math.max(0, cw - rw)
+    } else {
+      const rh = Math.min(ch, sum / cw)
+      let cursorX = cx
+      const endX = cx + cw
+      for (let i = 0; i < row.length; i++) {
+        const entry = row[i]
+        const rw =
+          i === row.length - 1
+            ? Math.max(0, endX - cursorX)
+            : Math.min(Math.max(0, endX - cursorX), (entry.area / sum) * cw)
+        out.push({ item: entry.item, x: cursorX, y: cy, w: rw, h: rh })
+        cursorX += rw
+      }
+      cy += rh
+      ch = Math.max(0, ch - rh)
+    }
+  }
+
+  let row: AreaEntry<T>[] = []
+  let rowSum = 0
+  let rowMin = Infinity
+  let rowMax = 0
+  for (const entry of scaled) {
+    const shortSide = Math.min(cw, ch)
+    if (row.length === 0) {
+      row = [entry]
+      rowSum = entry.area
+      rowMin = entry.area
+      rowMax = entry.area
+      continue
+    }
+    const currentWorst = worstRatioStats(rowSum, rowMin, rowMax, shortSide)
+    const nextSum = rowSum + entry.area
+    const nextMin = Math.min(rowMin, entry.area)
+    const nextMax = Math.max(rowMax, entry.area)
+    const nextWorst = worstRatioStats(nextSum, nextMin, nextMax, shortSide)
+    if (nextWorst <= currentWorst) {
+      row.push(entry)
+      rowSum = nextSum
+      rowMin = nextMin
+      rowMax = nextMax
+    } else {
+      commitRow(row, rowSum)
+      row = [entry]
+      rowSum = entry.area
+      rowMin = entry.area
+      rowMax = entry.area
+    }
+  }
+  if (row.length > 0) commitRow(row, rowSum)
+  return out
 }
 
 export function layoutRecordTreemap(items: readonly HistoryItem[]): RecordTreemap {

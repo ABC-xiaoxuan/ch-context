@@ -61,6 +61,9 @@
 .ch-ov-kpi strong.is-warn {
   color: var(--ch-amber);
 }
+.ch-ov-kpi strong.is-teal {
+  color: var(--ch-teal);
+}
 .ch-ov-sub {
   font-size: 10.5px;
   color: var(--ch-muted-2);

@@ -29,7 +29,7 @@ import { acquireBundledFonts } from './fonts.ts'
 const EMPTY_ROWS: readonly SessionRow[] = []
 const EMPTY_ITEMS: readonly HistoryItem[] = []
 
-export type PaletteTheme = 'graphite' | 'paper' | 'slate'
+export type PaletteTheme = 'crisp' | 'graphite' | 'paper' | 'slate'
 export type DensityMode = 'comfortable' | 'compact'
 export type FontPreset = 'modern' | 'mono-metrics' | 'system'
 
@@ -49,7 +49,7 @@ export function App({
   sessionId,
   projection,
   embedded = false,
-  palette = 'graphite',
+  palette = 'crisp',
   density = 'comfortable',
   font = 'modern',
   headerActions,

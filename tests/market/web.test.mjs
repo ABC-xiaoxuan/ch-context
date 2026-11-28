@@ -597,8 +597,21 @@ test('native market Web entry', async (t) => {
         })
         await page
           .locator('#settings')
-          .getByRole('button', { name: 'Warm Paper', exact: true })
+          .getByRole('button', { name: 'DSH Crisp', exact: true })
           .waitFor()
+        assert.equal(
+          await page
+            .locator('#settings')
+            .getByRole('button', { name: 'DSH Crisp', exact: true })
+            .getAttribute('aria-pressed'),
+          'true',
+        )
+        assert.equal(
+          await page.evaluate(
+            () => window.surface('#panel')?.querySelector('.ch-context')?.dataset.chPalette,
+          ),
+          'crisp',
+        )
         await page.locator('#settings').getByRole('button', { name: 'Warm Paper', exact: true }).click()
         await page.waitForFunction(
           () =>

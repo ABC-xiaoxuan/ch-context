@@ -9,21 +9,21 @@ import {
   type ReactElement,
   type RefObject,
 } from 'react'
-import type { HistoryItem, SessionRow } from './api.ts'
-import { pairedRecordIds, summarizeActivity, type ActivitySummary } from './activity.ts'
-import { relatedSessions } from './relationships.ts'
-import { ActivityTimeline, SessionNetworkCard } from './ActivityPanels.tsx'
 import {
   CommandExecutionsCard,
   FileActivityCard,
   type FileFilter,
 } from './ActivityCards.tsx'
-import { ContextStatsCard } from './ContextStatsCard.tsx'
-import { RecordBrowser } from './RecordBrowser.tsx'
-import { buildRecordIndex, filterIndexedRecords, type RecordFilter } from './record-index.ts'
+import { ActivityTimeline, SessionNetworkCard } from './ActivityPanels.tsx'
+import { pairedRecordIds, summarizeActivity, type ActivitySummary } from './activity.ts'
+import type { HistoryItem, SessionRow } from './api.ts'
 import { ContextCard, PerformanceCard, UsageCard } from './components.tsx'
+import { ContextStatsCard } from './ContextStatsCard.tsx'
 import type { useHistory, useUsage } from './hooks.ts'
 import type { Translate } from './i18n.ts'
+import { RecordBrowser } from './RecordBrowser.tsx'
+import { buildRecordIndex, filterIndexedRecords, type RecordFilter } from './record-index.ts'
+import { relatedSessions } from './relationships.ts'
 
 const EMPTY_ITEMS: readonly HistoryItem[] = []
 type DockTab = 'all' | 'files' | 'commands' | 'network'
@@ -157,6 +157,12 @@ export function Inspector({
     },
     [reveal],
   )
+  const jumpKind = useCallback(
+    (kind: HistoryItem['kind']) => {
+      jumpBrowser(kind === 'user' || kind === 'assistant' ? 'messages' : kind)
+    },
+    [jumpBrowser],
+  )
   const jumpTool = useCallback(
     (toolName: string) => {
       setFilter('tool')
@@ -228,25 +234,7 @@ export function Inspector({
   }
   return (
     <div className="ch-inspector" ref={root} tabIndex={-1} onKeyDown={handleKeyDown}>
-      <div className="ch-hero-grid">
-        <div ref={heroRef} className="ch-hero-slot">
-          <ContextCard
-            usage={usage.usage}
-            samples={usage.samples}
-            harness={currentHarness}
-            t={t}
-          />
-        </div>
-        <UsageCard usage={usage.usage} t={t} />
-      </div>
-
-      <div className="ch-pair-grid">
-        <PerformanceCard
-          usage={usage.usage}
-          items={items}
-          onSelectRecord={selectRecord}
-          t={t}
-        />
+      <div className="ch-top-grid">
         <ContextStatsCard
           summary={summary}
           items={items}
@@ -262,49 +250,69 @@ export function Inspector({
           onFocusRecord={selectRecord}
           t={t}
         />
-      </div>
-
-      <div className="ch-workbench">
-        <div className="ch-workbench-left">
-          <ActivityTimeline
+        <div ref={heroRef} className="ch-hero-slot">
+          <ContextCard
+            usage={usage.usage}
+            samples={usage.samples}
+            harness={currentHarness}
             items={items}
-            pairs={pairs}
-            matchedIds={matchedIds}
-            available={history.page !== null}
-            loading={history.loading}
-            focus={focus}
-            onFocus={focusInline}
+            summary={summary}
+            onFocusRecord={selectRecord}
             t={t}
           />
         </div>
-        <RecordBrowser
+      </div>
+
+      <div className="ch-pair-grid">
+        <UsageCard usage={usage.usage} t={t} />
+        <PerformanceCard
+          usage={usage.usage}
           items={items}
-          filteredRows={filteredItems}
-          recordIndex={recordIndex}
-          isFiltering={query !== deferredQuery}
-          pairs={pairs}
-          available={history.page !== null}
-          toolByRecord={toolByRecord}
-          focus={focus}
-          onFocus={setFocus}
-          onJumpRecord={focusInline}
-          filter={filter}
-          onFilter={setFilter}
-          query={query}
-          onQuery={setQuery}
-          errorsOnly={errorsOnly}
-          onErrorsOnly={setErrorsOnly}
-          loading={history.loading}
-          error={history.error}
-          hasMore={history.page?.hasMore ?? false}
-          older={history.older}
-          latest={history.latest}
-          isOlder={history.isOlder}
-          retry={retry}
-          searchInputRef={searchInputRef}
+          onSelectRecord={selectRecord}
+          onJumpKind={jumpKind}
           t={t}
         />
       </div>
+
+      <ActivityTimeline
+        items={items}
+        pairs={pairs}
+        matchedIds={matchedIds}
+        available={history.page !== null}
+        loading={history.loading}
+        focus={focus}
+        onFocus={focusInline}
+        onRevealBrowser={selectRecord}
+        t={t}
+      />
+
+      <RecordBrowser
+        items={items}
+        filteredRows={filteredItems}
+        recordIndex={recordIndex}
+        isFiltering={query !== deferredQuery}
+        pairs={pairs}
+        available={history.page !== null}
+        toolByRecord={toolByRecord}
+        focus={focus}
+        onFocus={setFocus}
+        onJumpRecord={focusInline}
+        filter={filter}
+        onFilter={setFilter}
+        query={query}
+        onQuery={setQuery}
+        errorsOnly={errorsOnly}
+        onErrorsOnly={setErrorsOnly}
+        loading={history.loading}
+        error={history.error}
+        hasMore={history.page?.hasMore ?? false}
+        older={history.older}
+        latest={history.latest}
+        isOlder={history.isOlder}
+        retry={retry}
+        searchInputRef={searchInputRef}
+        t={t}
+      />
 
       <div className="ch-dock-bar" role="tablist" aria-label={t('activityStats')}>
         {(

@@ -44,7 +44,11 @@ function languageOf(values: JsonObject): Language {
 }
 
 function paletteOf(values: JsonObject): PaletteTheme {
-  return values.palette === 'paper' || values.palette === 'slate' ? values.palette : 'graphite'
+  return values.palette === 'graphite' ||
+    values.palette === 'paper' ||
+    values.palette === 'slate'
+    ? values.palette
+    : 'crisp'
 }
 
 function densityOf(values: JsonObject): DensityMode {
@@ -62,7 +66,7 @@ function createPreferencesStore(api: WebExtensionApi): PreferencesStore {
   let snapshot: PreferencesSnapshot = {
     language: 'auto',
     active: automaticLocale(),
-    palette: 'graphite',
+    palette: 'crisp',
     density: 'comfortable',
     font: 'modern',
     status: 'loading',
@@ -232,6 +236,7 @@ const settingsText = {
       'Automatic uses the document language, then the browser language. The native Web extension API does not expose the CodexHost interface language.',
     appearance: 'Appearance & density',
     palette: 'Palette',
+    paletteCrisp: 'DSH Crisp',
     paletteGraphite: 'Apple Graphite',
     palettePaper: 'Warm Paper',
     paletteSlate: 'Precision Slate',
@@ -271,6 +276,7 @@ const settingsText = {
       '自动模式优先使用文档语言，其次使用浏览器语言。原生 Web 扩展 API 未提供 CodexHost 界面语言。',
     appearance: '外观与密度',
     palette: '配色方案',
+    paletteCrisp: 'DSH 原味',
     paletteGraphite: '苹果素灰',
     palettePaper: '纸感暖灰',
     paletteSlate: '冷静石板',
@@ -405,6 +411,7 @@ function Settings({ store }: { store: PreferencesStore }): ReactElement {
             <div role="group" aria-label={t.palette} className="ch-picker-header">
               {(
                 [
+                  ['crisp', t.paletteCrisp],
                   ['graphite', t.paletteGraphite],
                   ['paper', t.palettePaper],
                   ['slate', t.paletteSlate],

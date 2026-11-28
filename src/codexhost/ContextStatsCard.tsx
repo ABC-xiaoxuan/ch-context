@@ -8,12 +8,13 @@ import type { Translate } from './i18n.ts'
 import type { RelatedSession } from './relationships.ts'
 import { countTurns } from './report.ts'
 
-const ROLE_DOT: Record<HistoryItem['kind'], string> = {
-  user: 'var(--ch-green)',
-  assistant: 'var(--ch-blue)',
-  tool: 'var(--ch-teal)',
-  event: 'var(--ch-purple)',
-}
+const PROG_COLORS = [
+  'var(--ch-green)',
+  'var(--ch-blue)',
+  'var(--ch-purple)',
+  'var(--ch-amber)',
+  'var(--ch-teal)',
+]
 
 export const ContextStatsCard = memo(function ContextStatsCard({
   summary,
@@ -46,11 +47,23 @@ export const ContextStatsCard = memo(function ContextStatsCard({
 }): ReactElement {
   const turns = useMemo(() => countTurns(items), [items])
   const errorCount = useMemo(() => items.filter((item) => item.isError === true).length, [items])
+  const heavyCount = useMemo(() => items.filter((item) => item.text.length >= 2000).length, [items])
   const diagnostics = useMemo(() => computeWindowDiagnostics(items, summary, []), [items, summary])
   const topTools = useMemo(
     () => [...(summary?.tools ?? [])].sort((a, b) => b.count - a.count),
     [summary],
   )
+  const fileOps = useMemo(() => {
+    let reads = 0
+    let writes = 0
+    let searches = 0
+    for (const file of summary?.files ?? []) {
+      reads += file.reads
+      writes += file.writes
+      searches += file.searches
+    }
+    return { reads, writes, searches }
+  }, [summary])
   const topPrograms = useMemo(() => {
     const counts = new Map<string, number>()
     for (const command of summary?.commands ?? []) {
@@ -59,9 +72,17 @@ export const ContextStatsCard = memo(function ContextStatsCard({
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1])
   }, [summary])
+
+  const ioTotal = summary
+    ? summary.userMessages + fileOps.reads + fileOps.writes + fileOps.searches
+    : 0
+  const hiddenTools = Math.max(0, topTools.length - 4)
+  const hiddenPrograms = Math.max(0, topPrograms.length - 4)
+  const topHotspotId = diagnostics.topRecords[0]?.id
+
   return (
     <Card
-      title={t('hotspotsTitle')}
+      title={t('activityStats')}
       className="ch-stats-card"
       aside={
         <span className="ch-card-rate">
@@ -69,78 +90,210 @@ export const ContextStatsCard = memo(function ContextStatsCard({
         </span>
       }
     >
-      <div className="ch-stat-ribbon">
-        <button type="button" className="ch-stat-pill" onClick={onJumpTimeline}>
+      <div className="ch-core-tiles">
+        <button type="button" className="ch-kv-tile is-teal" onClick={onJumpTimeline}>
           <b>{summary ? turns : '—'}</b>
           <span>{t('turnsLabel')}</span>
         </button>
-        <button type="button" className="ch-stat-pill" onClick={() => onJumpBrowser('tool')}>
+        <button type="button" className="ch-kv-tile is-blue" onClick={() => onJumpBrowser('all')}>
+          <b>{summary ? summary.records : '—'}</b>
+          <span>{t('recordsLabel')}</span>
+        </button>
+        <button type="button" className="ch-kv-tile is-purple" onClick={() => onJumpBrowser('tool')}>
           <b>{summary ? summary.toolCalls : '—'}</b>
           <span>{t('toolCalls')}</span>
         </button>
-        <button type="button" className="ch-stat-pill" onClick={() => onJumpBrowser('messages')}>
+        <button
+          type="button"
+          className="ch-kv-tile is-green"
+          onClick={() => onJumpBrowser('messages')}
+        >
           <b>{summary ? summary.assistantMessages : '—'}</b>
           <span>{t('answersLabel')}</span>
         </button>
-        <button
-          type="button"
-          className={`ch-stat-pill ${errorCount > 0 ? 'is-err' : 'is-dim'}`}
-          onClick={onJumpErrors}
-        >
-          <b>{summary ? errorCount : '—'}</b>
-          <span>{t('failed')}</span>
-        </button>
-        <button type="button" className="ch-stat-pill" onClick={() => onJumpFiles('all')}>
-          <b>{summary ? summary.files.length : '—'}</b>
-          <span>{t('files')}</span>
-        </button>
-        <button type="button" className="ch-stat-pill" onClick={onJumpCommands}>
-          <b>{summary ? summary.commands.length : '—'}</b>
-          <span>{t('commands')}</span>
-        </button>
-        {related.length > 0 && (
-          <button type="button" className="ch-stat-pill" onClick={onJumpNetwork}>
-            <b>{related.length}</b>
-            <span>{t('loadedFamily')}</span>
-          </button>
-        )}
+        <div className="ch-kv-tile is-events">
+          <span>{t('windowCluesLabel')}</span>
+          <div className="ch-kv-event-pills">
+            <button
+              type="button"
+              className={`ch-ev-pill is-err ${errorCount === 0 ? 'is-dim' : ''}`}
+              onClick={onJumpErrors}
+            >
+              {t('failed')} <b>{summary ? errorCount : '—'}</b>
+            </button>
+            <span className="ch-ev-sep" aria-hidden="true">
+              /
+            </span>
+            <button
+              type="button"
+              className={`ch-ev-pill is-amber ${heavyCount === 0 ? 'is-dim' : ''}`}
+              onClick={() => {
+                if (topHotspotId) onFocusRecord(topHotspotId)
+                else onJumpBrowser('all')
+              }}
+            >
+              {t('heavyClue')} <b>{summary ? heavyCount : '—'}</b>
+            </button>
+            <span className="ch-ev-sep" aria-hidden="true">
+              /
+            </span>
+            <button
+              type="button"
+              className={`ch-ev-pill is-purple ${(summary?.events ?? 0) === 0 ? 'is-dim' : ''}`}
+              onClick={() => onJumpBrowser('event')}
+            >
+              {t('events')} <b>{summary ? summary.events : '—'}</b>
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div className="ch-hotspots-box">
-        <div className="ch-hotspots-head">
-          <span>{t('largestRecords')}</span>
-          <span>
-            {diagnostics.totalChars > 0 ? `${fmt(diagnostics.totalChars)} ${t('charsUnit')}` : '—'}
-          </span>
-        </div>
-        {diagnostics.topRecords.length === 0 ? (
-          <p className="ch-note">{t('noHotspots')}</p>
-        ) : (
-          <div className="ch-hotspots-list">
-            {diagnostics.topRecords.map((spot) => (
-              <button
-                key={spot.id}
-                type="button"
-                className={`ch-hotspot-row ${spot.isError ? 'is-err' : ''}`}
-                onClick={() => onFocusRecord(spot.id)}
-              >
-                <i className="ch-hotspot-dot" style={{ background: ROLE_DOT[spot.kind] }} />
-                <span className="ch-hotspot-seq">#{spot.seq}</span>
-                <span className="ch-hotspot-lbl">{spot.label}</span>
-                <span className="ch-hotspot-val">
-                  {fmt(spot.chars)} {t('charsUnit')} · {spot.sharePercent.toFixed(0)}%
-                </span>
-                <i
-                  className="ch-hotspot-bar"
-                  style={{
-                    width: `${Math.min(100, Math.max(4, spot.sharePercent))}%`,
-                    background: spot.isError ? 'var(--ch-danger)' : ROLE_DOT[spot.kind],
-                  }}
-                />
-              </button>
-            ))}
+      <div className="ch-ledger-grid">
+        <div className="ch-ledger-sec">
+          <div className="ch-ledger-head">
+            <span>{t('inputAndFiles')}</span>
+            <b>{summary ? fmt(ioTotal) : '—'}</b>
           </div>
-        )}
+          <div className="ch-chip-lane">
+            <button
+              type="button"
+              className={`ch-l-chip ${(summary?.userMessages ?? 0) === 0 ? 'is-dim' : ''}`}
+              onClick={() => onJumpBrowser('messages')}
+            >
+              <i style={{ background: 'var(--ch-green)' }} />
+              <span className="ch-l-chip-name">{t('user')}</span>
+              <b>{summary ? summary.userMessages : '—'}</b>
+            </button>
+            <button
+              type="button"
+              className={`ch-l-chip ${fileOps.reads === 0 ? 'is-dim' : ''}`}
+              onClick={() => onJumpFiles('reads')}
+            >
+              <i style={{ background: 'var(--ch-blue)' }} />
+              <span className="ch-l-chip-name">{t('reads')}</span>
+              <b>{summary ? fileOps.reads : '—'}</b>
+            </button>
+            <button
+              type="button"
+              className={`ch-l-chip ${fileOps.writes === 0 ? 'is-dim' : ''}`}
+              onClick={() => onJumpFiles('writes')}
+            >
+              <i style={{ background: 'var(--ch-teal)' }} />
+              <span className="ch-l-chip-name">{t('writes')}</span>
+              <b>{summary ? fileOps.writes : '—'}</b>
+            </button>
+            {fileOps.searches > 0 && (
+              <button
+                type="button"
+                className="ch-l-chip"
+                onClick={() => onJumpFiles('searches')}
+              >
+                <i style={{ background: 'var(--ch-amber)' }} />
+                <span className="ch-l-chip-name">{t('searches')}</span>
+                <b>{fileOps.searches}</b>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="ch-ledger-sec">
+          <div className="ch-ledger-head">
+            <span>{t('toolCalls')}</span>
+            <b>{summary ? fmt(summary.toolCalls) : '—'}</b>
+          </div>
+          <div className="ch-chip-lane">
+            {topTools.length === 0 ? (
+              <span className="ch-l-chip is-dim">—</span>
+            ) : (
+              <>
+                {topTools.slice(0, 4).map((tool, index) => (
+                  <button
+                    key={tool.name}
+                    type="button"
+                    className="ch-l-chip"
+                    onClick={() => onJumpTool(tool.name)}
+                  >
+                    <i
+                      style={{
+                        background: `color-mix(in srgb, var(--ch-teal) ${Math.max(42, 100 - index * 18)}%, transparent)`,
+                      }}
+                    />
+                    <span className="ch-l-chip-name">{tool.name}</span>
+                    <b>{tool.count}</b>
+                  </button>
+                ))}
+                {hiddenTools > 0 && (
+                  <button
+                    type="button"
+                    className="ch-l-chip is-more"
+                    onClick={() => onJumpBrowser('tool')}
+                  >
+                    +{hiddenTools} {t('moreItems')}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="ch-ledger-sec">
+          <div className="ch-ledger-head">
+            <span>{t('commands')}</span>
+            <b>{summary ? fmt(summary.commands.length) : '—'}</b>
+          </div>
+          <div className="ch-chip-lane">
+            {topPrograms.length === 0 ? (
+              <span className="ch-l-chip is-dim">—</span>
+            ) : (
+              <>
+                {topPrograms.slice(0, 4).map(([prog, count], index) => (
+                  <button
+                    key={prog}
+                    type="button"
+                    className="ch-l-chip"
+                    onClick={() => onJumpProgram(prog)}
+                  >
+                    <i style={{ background: PROG_COLORS[index % PROG_COLORS.length] }} />
+                    <span className="ch-l-chip-name">{prog}</span>
+                    <b>{count}</b>
+                  </button>
+                ))}
+                {hiddenPrograms > 0 && (
+                  <button type="button" className="ch-l-chip is-more" onClick={onJumpCommands}>
+                    +{hiddenPrograms} {t('moreItems')}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="ch-ledger-sec">
+          <div className="ch-ledger-head">
+            <span>{t('windowSummaryLabel')}</span>
+            <b>
+              {diagnostics.totalChars > 0
+                ? `${fmt(diagnostics.totalChars)} ${t('charsUnit')}`
+                : '—'}
+            </b>
+          </div>
+          <div className="ch-ledger-kv-list">
+            <button
+              type="button"
+              className="ch-ledger-kv-row"
+              onClick={() => onJumpFiles('all')}
+            >
+              <span>{t('files')}</span>
+              <b>
+                {summary ? summary.files.length : '—'} {t('filesUnit')}
+              </b>
+            </button>
+            <button type="button" className="ch-ledger-kv-row" onClick={onJumpNetwork}>
+              <span>{t('relatedSessionsLabel')}</span>
+              <b>{related.length}</b>
+            </button>
+          </div>
+        </div>
       </div>
 
       {(diagnostics.repeatedFiles.length > 0 || diagnostics.failedCommands.length > 0) && (
@@ -172,35 +325,6 @@ export const ContextStatsCard = memo(function ContextStatsCard({
               </button>
             )
           })}
-        </div>
-      )}
-
-      {(topTools.length > 0 || topPrograms.length > 0) && (
-        <div className="ch-compact-chips">
-          {topTools.slice(0, 4).map((tool) => (
-            <button
-              key={`t:${tool.name}`}
-              type="button"
-              className="ch-l-chip"
-              onClick={() => onJumpTool(tool.name)}
-            >
-              <i style={{ background: 'var(--ch-teal)' }} />
-              <span className="ch-l-chip-name">{tool.name}</span>
-              <b>{tool.count}</b>
-            </button>
-          ))}
-          {topPrograms.slice(0, 3).map(([prog, count]) => (
-            <button
-              key={`p:${prog}`}
-              type="button"
-              className="ch-l-chip"
-              onClick={() => onJumpProgram(prog)}
-            >
-              <i style={{ background: 'var(--ch-accent)' }} />
-              <span className="ch-l-chip-name">{prog}</span>
-              <b>{count}</b>
-            </button>
-          ))}
         </div>
       )}
     </Card>

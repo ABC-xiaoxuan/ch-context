@@ -9,10 +9,13 @@ import {
 } from 'react'
 import { Donut } from '../client/components/donut.tsx'
 import { fmt, fmtDuration, fmtTime } from '../client/format.ts'
+import type { ActivitySummary } from './activity.ts'
 import type { HistoryItem } from './api.ts'
-import { occupancyOf, tokenParts, type Sample, type Usage } from './model.ts'
-import type { Translate } from './i18n.ts'
+import { computeWindowDiagnostics } from './diagnostics.ts'
 import { formatCredits, formatUsd } from './format.ts'
+import type { Translate } from './i18n.ts'
+import { occupancyOf, tokenParts, type Sample, type Usage } from './model.ts'
+import { summarizeCharsByKind } from './timeline-model.ts'
 
 export function Icon({ size = 20 }: { size?: number }): ReactElement {
   return (
@@ -83,6 +86,13 @@ export function Card({
   )
 }
 
+const ROLE_DOT: Record<HistoryItem['kind'], string> = {
+  user: 'var(--ch-green)',
+  assistant: 'var(--ch-blue)',
+  tool: 'var(--ch-teal)',
+  event: 'var(--ch-purple)',
+}
+
 const Sparkline = memo(function Sparkline({
   samples,
   tone,
@@ -106,7 +116,7 @@ const Sparkline = memo(function Sparkline({
     const nextPoints = samples.map((sample, index) => {
       const x = samples.length === 1 ? 210 : 12 + (index / (samples.length - 1)) * 396
       const clamped = Math.min(100, Math.max(0, sample.percent))
-      const y = 38 - ((clamped - minP) / spanP) * 30
+      const y = 34 - ((clamped - minP) / spanP) * 26
       return { x, y, sample }
     })
     const nextLine = nextPoints
@@ -114,7 +124,7 @@ const Sparkline = memo(function Sparkline({
       .join(' ')
     const nextArea =
       nextPoints.length > 1
-        ? `${nextLine} L${nextPoints[nextPoints.length - 1].x.toFixed(1)},43 L${nextPoints[0].x.toFixed(1)},43 Z`
+        ? `${nextLine} L${nextPoints[nextPoints.length - 1].x.toFixed(1)},39 L${nextPoints[0].x.toFixed(1)},39 Z`
         : ''
     return { points: nextPoints, linePath: nextLine, areaPath: nextArea }
   }, [samples])
@@ -130,9 +140,9 @@ const Sparkline = memo(function Sparkline({
               : `${samples.length} ${t('points')} · ${first!.percent.toFixed(1)}% → ${last!.percent.toFixed(1)}% (${delta !== null && delta >= 0 ? '+' : ''}${delta?.toFixed(1)}%)`}
         </strong>
       </div>
-      <svg className="ch-spark-svg" viewBox="0 0 420 46" role="img" aria-label={t('sampled')}>
-        <line x1="0" y1="10" x2="420" y2="10" className="ch-chart-grid" />
-        <line x1="0" y1="26" x2="420" y2="26" className="ch-chart-grid" />
+      <svg className="ch-spark-svg" viewBox="0 0 420 40" role="img" aria-label={t('sampled')}>
+        <line x1="0" y1="8" x2="420" y2="8" className="ch-chart-grid" />
+        <line x1="0" y1="22" x2="420" y2="22" className="ch-chart-grid" />
         {areaPath && <path d={areaPath} className="ch-spark-area" />}
         {linePath && <path d={linePath} className="ch-chart-line" />}
         {points.map((point, index) => (
@@ -140,7 +150,7 @@ const Sparkline = memo(function Sparkline({
             key={`${point.sample.time}-${index}`}
             cx={point.x.toFixed(1)}
             cy={point.y.toFixed(1)}
-            r={index === points.length - 1 ? 3.8 : 2.5}
+            r={index === points.length - 1 ? 3.5 : 2.3}
             className={`ch-chart-dot ${index === points.length - 1 ? 'is-latest' : ''}`}
           >
             <title>
@@ -153,15 +163,23 @@ const Sparkline = memo(function Sparkline({
   )
 })
 
+const EMPTY_ITEMS: readonly HistoryItem[] = []
+
 export const ContextCard = memo(function ContextCard({
   usage,
   samples,
   harness,
+  items = EMPTY_ITEMS,
+  summary = null,
+  onFocusRecord,
   t,
 }: {
   usage: Usage | null
   samples: readonly Sample[]
   harness: string
+  items?: readonly HistoryItem[]
+  summary?: ActivitySummary | null
+  onFocusRecord?: (id: string) => void
   t: Translate
 }): ReactElement {
   const occupancy = occupancyOf(usage)
@@ -177,6 +195,7 @@ export const ContextCard = memo(function ContextCard({
       ? Math.max(0, usage.contextWindowTokens - usage.contextUsedTokens)
       : undefined
   const remainingPct = ratio !== undefined ? Math.max(0, 100 - ratio) : undefined
+  const diagnostics = useMemo(() => computeWindowDiagnostics(items, summary, []), [items, summary])
   return (
     <Card
       title={t('context')}
@@ -205,6 +224,8 @@ export const ContextCard = memo(function ContextCard({
         >
           <span style={{ width: `${Math.min(100, ratio ?? 0)}%` }} />
           <i className="ch-reserve-zone" aria-hidden="true" title={t('cautionZone')} />
+          <i className="ch-reserve-critical" aria-hidden="true" title={t('cautionReserveZone')} />
+          <i className="ch-reserve-trigger" aria-hidden="true" />
         </div>
         <div className="ch-ctx-legend ch-context-values">
           <span className="ch-ctx-leg">
@@ -236,6 +257,46 @@ export const ContextCard = memo(function ContextCard({
         </div>
       </div>
       <Sparkline samples={samples} tone={tone} t={t} />
+      {onFocusRecord && (
+        <div className="ch-hotspots-box">
+          <div className="ch-hotspots-head">
+            <span>{t('largestRecords')}</span>
+            <span>
+              {diagnostics.totalChars > 0
+                ? `${fmt(diagnostics.totalChars)} ${t('charsUnit')}`
+                : '—'}
+            </span>
+          </div>
+          {diagnostics.topRecords.length === 0 ? (
+            <p className="ch-note">{t('noHotspots')}</p>
+          ) : (
+            <div className="ch-hotspots-list">
+              {diagnostics.topRecords.map((spot) => (
+                <button
+                  key={spot.id}
+                  type="button"
+                  className={`ch-hotspot-row ${spot.isError ? 'is-err' : ''}`}
+                  onClick={() => onFocusRecord(spot.id)}
+                >
+                  <i className="ch-hotspot-dot" style={{ background: ROLE_DOT[spot.kind] }} />
+                  <span className="ch-hotspot-seq">#{spot.seq}</span>
+                  <span className="ch-hotspot-lbl">{spot.label}</span>
+                  <span className="ch-hotspot-val">
+                    {fmt(spot.chars)} {t('charsUnit')} · {spot.sharePercent.toFixed(0)}%
+                  </span>
+                  <i
+                    className="ch-hotspot-bar"
+                    style={{
+                      width: `${Math.min(100, Math.max(4, spot.sharePercent))}%`,
+                      background: spot.isError ? 'var(--ch-danger)' : ROLE_DOT[spot.kind],
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   )
 })
@@ -248,9 +309,16 @@ const PART_COLORS = {
   output: 'var(--ch-purple)',
 }
 
-export const UsageCard = memo(function UsageCard({ usage, t }: { usage: Usage | null; t: Translate }): ReactElement {
+export const UsageCard = memo(function UsageCard({
+  usage,
+  t,
+}: {
+  usage: Usage | null
+  t: Translate
+}): ReactElement {
   const [hover, setHover] = useState<string | null>(null)
   const parts = tokenParts(usage)
+  const activeHover = hover !== null && parts.some((part) => part.kind === hover) ? hover : null
   const sum = parts.reduce((total, part) => total + part.value, 0)
   const lowerBound = (usage?.unpricedModels?.length ?? 0) > 0
   const costLabel =
@@ -276,7 +344,7 @@ export const UsageCard = memo(function UsageCard({ usage, t }: { usage: Usage | 
     >
       <div className="ch-token-layout">
         <Donut
-          size={106}
+          size={108}
           segments={parts.map((part) => ({
             key: part.kind,
             value: part.value,
@@ -284,22 +352,24 @@ export const UsageCard = memo(function UsageCard({ usage, t }: { usage: Usage | 
           }))}
           centerTop={fmt(parts.length ? sum : usage?.totalTokens)}
           centerSub={parts.length ? t('inputOutput') : t('total')}
-          hoverKey={hover}
+          hoverKey={activeHover}
           onHoverKey={setHover}
         />
         <div className="ch-token-body">
           {parts.length ? (
-            <div className="ch-sl-grid">
+            <div className={`ch-sl-grid ${activeHover !== null ? 'is-dim' : ''}`}>
               {parts.map((part) => (
                 <button
                   key={part.kind}
                   type="button"
-                  className={`ch-sl-item ${hover === part.kind ? 'is-hi' : ''}`}
+                  className={`ch-sl-item ${activeHover === part.kind ? 'is-hi' : ''}`}
+                  aria-pressed={activeHover === part.kind}
                   title={`${t(part.kind)}: ${part.value}`}
                   onMouseEnter={() => setHover(part.kind)}
                   onMouseLeave={() => setHover(null)}
                   onFocus={() => setHover(part.kind)}
                   onBlur={() => setHover(null)}
+                  onClick={() => setHover((cur) => (cur === part.kind ? null : part.kind))}
                 >
                   <span className="ch-sl-top">
                     <span className="ch-swatch" style={{ background: PART_COLORS[part.kind] }} />
@@ -336,7 +406,9 @@ export const UsageCard = memo(function UsageCard({ usage, t }: { usage: Usage | 
               ? '—'
               : `${lowerBound ? '≥ ' : ''}${formatUsd(usage.totalCostUsd)}`}
           </b>
-          {usage?.totalCostUsd !== undefined && <small className="ch-foot-sub"> · {costLabel}</small>}
+          {usage?.totalCostUsd !== undefined && (
+            <small className="ch-foot-sub"> · {costLabel}</small>
+          )}
         </span>
         <div className="ch-token-foot-right">
           <span title={t('inputIncludesCache')}>
@@ -355,26 +427,6 @@ export const UsageCard = memo(function UsageCard({ usage, t }: { usage: Usage | 
   )
 })
 
-function CacheBar({
-  label,
-  value,
-  tone = 'teal',
-}: {
-  label: string
-  value?: number
-  tone?: 'teal' | 'blue'
-}): ReactElement {
-  return (
-    <div className="ch-cache-row">
-      <span>{label}</span>
-      <div className="ch-cache-track">
-        <i className={`is-${tone}`} style={{ width: `${Math.min(100, value ?? 0)}%` }} />
-      </div>
-      <b>{value === undefined ? '—' : `${value.toFixed(1)}%`}</b>
-    </div>
-  )
-}
-
 const STRIP_COLOR = {
   user: 'var(--ch-green)',
   assistant: 'var(--ch-blue)',
@@ -382,39 +434,68 @@ const STRIP_COLOR = {
   event: 'var(--ch-purple)',
 }
 
+const PAYLOAD_LABELS = {
+  tool: 'tools',
+  assistant: 'assistantMessages',
+  user: 'userMessages',
+  event: 'events',
+} as const
+
 export const PerformanceCard = memo(function PerformanceCard({
   usage,
   items,
   onSelectRecord,
+  onJumpKind,
   t,
 }: {
   usage: Usage | null
   items: readonly HistoryItem[]
   onSelectRecord: (id: string) => void
+  onJumpKind?: (kind: HistoryItem['kind']) => void
   t: Translate
 }): ReactElement {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null)
+  const [hoverKind, setHoverKind] = useState<string | null>(null)
   const tps = usage?.outputTokensPerSecond ?? usage?.sessionOutputTokensPerSecond
   const tpsLabel = usage?.outputTokensPerSecond !== undefined ? t('tps') : t('avgTps')
   const midIndex = Math.floor(items.length / 2)
+  const { totalChars, charsByKind } = useMemo(() => summarizeCharsByKind(items), [items])
+  const payloadParts = useMemo(
+    () =>
+      (['tool', 'assistant', 'user', 'event'] as const)
+        .map((kind) => ({
+          key: kind,
+          label: t(PAYLOAD_LABELS[kind]),
+          value: charsByKind[kind],
+          color: STRIP_COLOR[kind],
+        }))
+        .filter((part) => part.value > 0),
+    [charsByKind, t],
+  )
+  const activeHoverKind =
+    hoverKind !== null && payloadParts.some((part) => part.key === hoverKind) ? hoverKind : null
   const stripRects = useMemo(() => {
     const count = items.length
     if (count === 0) return null
     const step = 600 / count
     const gap = count > 60 ? 0 : Math.min(1.5, step * 0.14)
     const width = Math.max(0.6, step - gap)
-    return items.map((item, index) => (
-      <rect
-        key={item.id}
-        x={index * step}
-        y={0}
-        width={width}
-        height={11}
-        fill={item.isError === true ? 'var(--ch-danger)' : STRIP_COLOR[item.kind]}
-      />
-    ))
-  }, [items])
+    return items.map((item, index) => {
+      const dimmed = activeHoverKind !== null && item.kind !== activeHoverKind
+      return (
+        <rect
+          key={item.id}
+          x={index * step}
+          y={0}
+          width={width}
+          height={11}
+          fill={item.isError === true ? 'var(--ch-danger)' : STRIP_COLOR[item.kind]}
+          opacity={dimmed ? 0.22 : 1}
+        />
+      )
+    })
+  }, [items, activeHoverKind])
   const indexAt = (event: MouseEvent<SVGSVGElement>): number | null => {
     if (items.length === 0) return null
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -452,15 +533,67 @@ export const PerformanceCard = memo(function PerformanceCard({
   }
   return (
     <Card
-      title={t('performance')}
+      title={t('payloadVolume')}
       className="ch-performance-card"
       aside={
-        <span className="ch-card-rate">
-          {tpsLabel} <b>{tps === undefined ? '—' : `${tps.toFixed(1)} tok/s`}</b>
+        <span className="ch-card-rate" title={t('payloadCharsNote')}>
+          {tps !== undefined ? (
+            <>
+              {tpsLabel} <b>{tps.toFixed(1)} tok/s</b> ·{' '}
+            </>
+          ) : null}
+          <b>{totalChars > 0 ? `${fmt(totalChars)} ${t('charsUnit')}` : '—'}</b>
         </span>
       }
     >
-      <dl className="ch-performance">
+      <div className="ch-token-layout">
+        <Donut
+          size={108}
+          segments={payloadParts.map((part) => ({
+            key: part.key,
+            value: part.value,
+            color: part.color,
+          }))}
+          centerTop={totalChars > 0 ? fmt(totalChars) : '—'}
+          centerSub={t('totalCharsLabel')}
+          hoverKey={activeHoverKind}
+          onHoverKey={setHoverKind}
+        />
+        <div className="ch-token-body">
+          {payloadParts.length > 0 ? (
+            <div className={`ch-sl-grid ${activeHoverKind !== null ? 'is-dim' : ''}`}>
+              {payloadParts.map((part) => (
+                <button
+                  key={part.key}
+                  type="button"
+                  className={`ch-sl-item ${activeHoverKind === part.key ? 'is-hi' : ''}`}
+                  title={`${part.label}: ${fmt(part.value)} ${t('charsUnit')}`}
+                  onMouseEnter={() => setHoverKind(part.key)}
+                  onMouseLeave={() => setHoverKind(null)}
+                  onFocus={() => setHoverKind(part.key)}
+                  onBlur={() => setHoverKind(null)}
+                  onClick={() => onJumpKind?.(part.key)}
+                >
+                  <span className="ch-sl-top">
+                    <span className="ch-swatch" style={{ background: part.color }} />
+                    <span className="ch-sl-label">{part.label}</span>
+                    <b className="ch-sl-pct">
+                      {totalChars > 0 ? `${((part.value / totalChars) * 100).toFixed(1)}%` : '—'}
+                    </b>
+                  </span>
+                  <span className="ch-sl-sub">
+                    {fmt(part.value)} {t('charsUnit')}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="ch-note">{t('noCharsInWindow')}</p>
+          )}
+        </div>
+      </div>
+
+      <dl className="ch-performance ch-perf-inline">
         <Metric label={t('tps')} value={usage?.outputTokensPerSecond} suffix="tok/s" />
         <Metric label={t('avgTps')} value={usage?.sessionOutputTokensPerSecond} suffix="tok/s" />
         <Metric
@@ -472,10 +605,7 @@ export const PerformanceCard = memo(function PerformanceCard({
           <Metric label={t('credits')} value={usage.totalCredits} format={formatCredits} />
         )}
       </dl>
-      <div className="ch-cache-bars">
-        <CacheBar label={t('cacheHit')} value={usage?.cacheHitRatePercent} tone="teal" />
-        <CacheBar label={t('avgCache')} value={usage?.sessionCacheHitRatePercent} tone="blue" />
-      </div>
+
       <div className="ch-tstrip">
         <div className="ch-tstrip-head">
           <span>{t('windowActivityStrip')}</span>

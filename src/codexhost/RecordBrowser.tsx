@@ -3,14 +3,15 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
   type RefObject,
 } from 'react'
-import type { HistoryItem } from './api.ts'
-import { Card, RecordBadges } from './components.tsx'
 import { fmt, fmtTime } from '../client/format.ts'
 import { ROLE_COLOR } from './ActivityPanels.tsx'
+import type { HistoryItem } from './api.ts'
+import { Card, RecordBadges } from './components.tsx'
 import type { Translate } from './i18n.ts'
 import { InlineRecordDetail } from './RecordDetail.tsx'
 import {
@@ -19,9 +20,11 @@ import {
   type IndexedHistoryItem,
   type RecordFilter,
 } from './record-index.ts'
+import { buildDnaRunsFromItems } from './timeline-model.ts'
 import { layoutRecordTreemap } from './treemap.ts'
 
 export type { RecordFilter } from './record-index.ts'
+type BrowserLayout = 'categories' | 'sequence' | 'split'
 
 export function filterHistoryRecords(
   items: readonly HistoryItem[],
@@ -45,6 +48,7 @@ const RecordRow = memo(function RecordRow({
   label,
   tag,
   isSelected,
+  inlineDetail,
   paired,
   callArgs,
   onFocus,
@@ -55,6 +59,7 @@ const RecordRow = memo(function RecordRow({
   label: string
   tag?: string
   isSelected: boolean
+  inlineDetail: boolean
   paired?: HistoryItem
   callArgs: Array<[string, string]> | null
   onFocus: (id: string) => void
@@ -68,14 +73,18 @@ const RecordRow = memo(function RecordRow({
       <button
         type="button"
         className={`ch-record-item ch-record-${item.kind} ${isSelected ? 'is-selected' : ''} ${item.isError === true ? 'is-error-row' : ''}`}
-        aria-expanded={isSelected}
+        aria-expanded={inlineDetail ? isSelected : undefined}
         aria-pressed={isSelected}
         title={label}
         onClick={() => onFocus(item.id)}
       >
-        <span className="ch-br-chev" aria-hidden="true">
-          {isSelected ? '▾' : '▸'}
-        </span>
+        {inlineDetail ? (
+          <span className="ch-br-chev" aria-hidden="true">
+            {isSelected ? '▾' : '▸'}
+          </span>
+        ) : (
+          <i className="ch-cat-sq" style={{ background: ROLE_COLOR[item.kind] }} aria-hidden="true" />
+        )}
         {item.isError === true && <i className="ch-br-err-dot" aria-hidden="true" />}
         {tag ? (
           <span className="ch-br-tag">{tag}</span>
@@ -87,6 +96,9 @@ const RecordRow = memo(function RecordRow({
         )}
         <span className="ch-record-title">{label}</span>
         <RecordBadges item={item} t={t} />
+        {item.text.length > 0 && (
+          <span className="ch-record-chars">{fmt(item.text.length)}</span>
+        )}
         <span className="ch-record-time">
           {item.time === undefined ? '' : fmtTime(item.time)}
         </span>
@@ -94,7 +106,7 @@ const RecordRow = memo(function RecordRow({
           #{item.seq}
         </span>
       </button>
-      {isSelected && (
+      {inlineDetail && isSelected && (
         <InlineRecordDetail
           key={item.id}
           item={item}
@@ -163,8 +175,9 @@ export const RecordBrowser = memo(function RecordBrowser({
   t: Translate
 }): ReactElement {
   const deferred = useDeferredValue(query)
-  const [grouped, setGrouped] = useState(true)
+  const [layout, setLayout] = useState<BrowserLayout>('categories')
   const [showMap, setShowMap] = useState(false)
+  const [dnaBar, setDnaBar] = useState(false)
   const [expanded, setExpanded] = useState<Set<HistoryItem['kind']>>(
     () => new Set(['user', 'assistant', 'tool']),
   )
@@ -175,20 +188,36 @@ export const RecordBrowser = memo(function RecordBrowser({
   )
   const recordIndex = providedIndex ?? fallbackIndex!
   const errorCount = useMemo(() => items.filter((item) => item.isError === true).length, [items])
-  const counts = useMemo(() => {
+  const { counts, charsByKind, totalChars } = useMemo(() => {
     let user = 0
     let assistant = 0
     let tool = 0
     let event = 0
+    const chars: Record<HistoryItem['kind'], number> = {
+      user: 0,
+      assistant: 0,
+      tool: 0,
+      event: 0,
+    }
+    let sumChars = 0
     for (const item of items) {
+      chars[item.kind] += item.text.length
+      sumChars += item.text.length
       if (item.kind === 'user') user += 1
       else if (item.kind === 'assistant') assistant += 1
       else if (item.kind === 'tool') tool += 1
       else event += 1
     }
-    return { all: items.length, messages: user + assistant, user, assistant, tool, event }
+    return {
+      counts: { all: items.length, messages: user + assistant, user, assistant, tool, event },
+      charsByKind: chars,
+      totalChars: sumChars,
+    }
   }, [items])
   const treemap = useMemo(() => (showMap ? layoutRecordTreemap(items) : null), [showMap, items])
+  const dnaRuns = useMemo(() => (dnaBar ? buildDnaRunsFromItems(items, 48) : []), [dnaBar, items])
+  const dnaTotal = useMemo(() => dnaRuns.reduce((sum, run) => sum + run.chars, 0), [dnaRuns])
+  const splitLeftRef = useRef<HTMLDivElement>(null)
   const fallbackRows = useMemo(
     () =>
       filteredRows
@@ -219,12 +248,19 @@ export const RecordBrowser = memo(function RecordBrowser({
       previous.has(selected.kind) ? previous : new Set([...previous, selected.kind]),
     )
   }, [selected?.id, focus, filteringPending, onFocus])
+  useEffect(() => {
+    if (layout !== 'split' || !selected) return
+    const target = splitLeftRef.current?.querySelector('.ch-record-item.is-selected')
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ block: 'nearest' })
+    }
+  }, [layout, selected?.id])
   const selectedIndex = rows.findIndex((item) => item.id === selected?.id)
-  const renderRow = (item: HistoryItem): ReactElement => {
+
+  const detailPropsOf = (item: HistoryItem) => {
     const indexed = recordIndex.get(item.id)
     const tool = indexed?.tool ?? toolByRecord.get(item.id)
     const label = indexed?.label ?? item.title
-    const isSelected = selected?.id === item.id
     const tag = item.toolName ?? tool
     const paired = itemById.get(pairs.get(item.id) ?? '')
     const callArgs =
@@ -233,13 +269,19 @@ export const RecordBrowser = memo(function RecordBrowser({
         : paired?.eventType === 'tool/call'
           ? (recordIndex.get(paired.id)?.parsedArgs ?? null)
           : null
+    return { label, tag, paired, callArgs }
+  }
+
+  const renderRow = (item: HistoryItem, inlineDetail: boolean): ReactElement => {
+    const { label, tag, paired, callArgs } = detailPropsOf(item)
     return (
       <RecordRow
         key={item.id}
         item={item}
         label={label}
         tag={tag}
-        isSelected={isSelected}
+        isSelected={selected?.id === item.id}
+        inlineDetail={inlineDetail}
         paired={paired}
         callArgs={callArgs}
         onFocus={onFocus}
@@ -248,71 +290,149 @@ export const RecordBrowser = memo(function RecordBrowser({
       />
     )
   }
+
   const groupLabels = {
     user: 'userMessages',
     assistant: 'assistantMessages',
     tool: 'tools',
     event: 'events',
   } as const
-  const totalCount = Math.max(1, items.length)
+
+  const selectedDetail = selected ? detailPropsOf(selected) : null
+
   return (
     <Card
       title={t('browserTitle')}
       className="ch-browser-card"
       aside={
         <div className="ch-br-head-right">
-          <div className="ch-seg" role="group">
+          <button
+            type="button"
+            className={`ch-mini-button ch-tl-dna-btn ${dnaBar ? 'is-active' : ''}`}
+            aria-pressed={dnaBar}
+            onClick={() => setDnaBar((value) => !value)}
+          >
+            {t('dnaSplit')}
+          </button>
+          <div className="ch-seg" role="group" aria-label={t('browserTitle')}>
             <button
               type="button"
-              className={grouped ? 'is-active' : ''}
-              aria-pressed={grouped}
-              onClick={() => setGrouped(true)}
+              className={layout === 'categories' ? 'is-active' : ''}
+              aria-pressed={layout === 'categories'}
+              onClick={() => setLayout('categories')}
             >
               {t('categories')}
             </button>
             <button
               type="button"
-              className={!grouped ? 'is-active' : ''}
-              aria-pressed={!grouped}
-              onClick={() => setGrouped(false)}
+              className={layout === 'sequence' ? 'is-active' : ''}
+              aria-pressed={layout === 'sequence'}
+              onClick={() => setLayout('sequence')}
             >
               {t('chronological')}
             </button>
+            <button
+              type="button"
+              className={layout === 'split' ? 'is-active' : ''}
+              aria-pressed={layout === 'split'}
+              onClick={() => setLayout('split')}
+            >
+              {t('splitView')}
+            </button>
           </div>
-          <button
-            type="button"
-            className={`ch-map-btn ${showMap ? 'is-active' : ''}`}
-            aria-pressed={showMap}
-            aria-label={t('treemapToggle')}
-            title={t('treemapToggle')}
-            onClick={() => setShowMap((value) => !value)}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-              <rect x="1.5" y="1.5" width="7" height="8" rx="1.2" />
-              <rect x="10.5" y="1.5" width="4" height="5" rx="1.2" />
-              <rect x="10.5" y="8.5" width="4" height="6" rx="1.2" />
-              <rect x="1.5" y="11.5" width="7" height="3" rx="1.2" />
-            </svg>
-          </button>
           <span className="ch-scope">
             {t('browserScope')} · {available ? items.length : '—'}
           </span>
         </div>
       }
     >
-      <div className="ch-br-summary">
-        <b>
-          {t('historyWindow')} · {available ? items.length : '—'} {t('count')}
-        </b>
-        <span>{t('byRecordCount')}</span>
-      </div>
-      <div className="ch-br-propbar" aria-hidden="true">
-        {(['user', 'assistant', 'tool', 'event'] as const).map((kind) => {
-          const share = items.length > 0 ? (counts[kind] / totalCount) * 100 : 0
-          return share > 0 ? (
-            <div key={kind} style={{ width: `${share}%`, background: ROLE_COLOR[kind] }} />
-          ) : null
-        })}
+      <div className="ch-br-bar-row">
+        <div className="ch-br-bar-main">
+          <div className="ch-br-summary">
+            <b>
+              {t('historyWindow')} · {available ? items.length : '—'} {t('count')}
+            </b>
+            <span>
+              {totalChars > 0 ? `${fmt(totalChars)} ${t('charsUnit')} · ` : ''}
+              {t('payloadCharsNote')}
+            </span>
+          </div>
+          <div
+            className={`ch-br-propbar ${dnaBar ? 'is-dna' : ''}`}
+            role="group"
+            aria-label={t('payloadVolume')}
+          >
+            {dnaBar
+              ? dnaRuns.map((run, idx) => {
+                  const share = dnaTotal > 0 ? (run.chars / dnaTotal) * 100 : 0
+                  if (share <= 0) return null
+                  const label = `${t(groupLabels[run.kind])}${run.isError ? ` · ${t('failed')}` : ''} (${share.toFixed(1)}%)`
+                  return (
+                    <button
+                      key={`dna-${idx}`}
+                      type="button"
+                      style={{
+                        width: `${share}%`,
+                        background: run.isError ? 'var(--ch-danger)' : ROLE_COLOR[run.kind],
+                      }}
+                      title={label}
+                      aria-label={label}
+                      onClick={() => {
+                        setLayout('categories')
+                        setExpanded(new Set([run.kind]))
+                      }}
+                    />
+                  )
+                })
+              : (['tool', 'assistant', 'user', 'event'] as const).map((kind) => {
+                  const weight = totalChars > 0 ? charsByKind[kind] : counts[kind]
+                  const denom = totalChars > 0 ? totalChars : Math.max(1, items.length)
+                  const share = items.length > 0 ? (weight / denom) * 100 : 0
+                  if (share <= 0) return null
+                  const detail =
+                    totalChars > 0
+                      ? `${fmt(charsByKind[kind])} ${t('charsUnit')}`
+                      : `${counts[kind]} ${t('count')}`
+                  const label = `${t(groupLabels[kind])}: ${detail} (${share.toFixed(1)}%)`
+                  return (
+                    <button
+                      key={kind}
+                      type="button"
+                      style={{ width: `${share}%`, background: ROLE_COLOR[kind] }}
+                      title={label}
+                      aria-label={label}
+                      onClick={() => {
+                        setLayout('categories')
+                        setExpanded(new Set([kind]))
+                      }}
+                    />
+                  )
+                })}
+          </div>
+        </div>
+        <button
+          type="button"
+          className={`ch-map-btn ${showMap ? 'is-active' : ''}`}
+          aria-pressed={showMap}
+          aria-label={t('treemapToggle')}
+          title={t('treemapToggle')}
+          onClick={() => setShowMap((value) => !value)}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            aria-hidden="true"
+          >
+            <rect x="1.5" y="1.5" width="7.2" height="5.8" rx="1.1" />
+            <rect x="10.2" y="1.5" width="4.3" height="5.8" rx="1.1" />
+            <rect x="1.5" y="8.8" width="4.8" height="5.7" rx="1.1" />
+            <rect x="7.8" y="8.8" width="6.7" height="5.7" rx="1.1" />
+          </svg>
+        </button>
       </div>
 
       {showMap && treemap && (
@@ -338,7 +458,7 @@ export const RecordBrowser = memo(function RecordBrowser({
                     height: `${cat.h}%`,
                   }}
                 >
-                  {cat.h >= 15 && (
+                  {cat.h >= 15 && cat.w >= 8 && (
                     <button
                       type="button"
                       className="ch-map-cat-head"
@@ -348,28 +468,41 @@ export const RecordBrowser = memo(function RecordBrowser({
                       }}
                     >
                       <span>{t(groupLabels[cat.kind])}</span>
-                      <b>{Math.round(cat.share)}%</b>
+                      {cat.w >= 14 && <b>{Math.round(cat.share)}%</b>}
                     </button>
                   )}
                   <div className="ch-map-cat-body">
-                    {cat.blocks.map((block) => (
-                      <button
-                        key={block.id}
-                        type="button"
-                        className={`ch-map-block ${selected?.id === block.id ? 'is-selected' : ''} ${block.isError ? 'is-err' : ''}`}
-                        style={{
-                          left: `${block.x}%`,
-                          top: `${block.y}%`,
-                          width: `${block.w}%`,
-                          height: `${block.h}%`,
-                        }}
-                        title={`#${block.seq} ${block.label} · ${fmt(block.chars)} ${t('charsUnit')}`}
-                        onClick={() => onJumpRecord(block.id)}
-                      >
-                        <span className="ch-map-lbl">#{block.seq}</span>
-                        <span className="ch-map-num">{fmt(block.chars)}</span>
-                      </button>
-                    ))}
+                    {cat.blocks.map((block) => {
+                      const showLabel = block.w * cat.w >= 480 && block.h * cat.h >= 420
+                      const showNum = block.w * cat.w >= 640 && block.h * cat.h >= 850
+                      return (
+                        <button
+                          key={block.id}
+                          type="button"
+                          className={`ch-map-block ${selected?.id === block.id ? 'is-selected' : ''} ${block.isError ? 'is-err' : ''}`}
+                          style={{
+                            left: `${block.x}%`,
+                            top: `${block.y}%`,
+                            width: `${block.w}%`,
+                            height: `${block.h}%`,
+                          }}
+                          title={`#${block.seq} ${block.label} · ${fmt(block.chars)} ${t('charsUnit')}`}
+                          aria-label={`#${block.seq} ${block.label} · ${fmt(block.chars)} ${t('charsUnit')}`}
+                          onClick={() => onJumpRecord(block.id)}
+                        >
+                          {showLabel && (
+                            <span className="ch-map-lbl">
+                              #{block.seq} {block.label}
+                            </span>
+                          )}
+                          {showNum && (
+                            <span className="ch-map-num">
+                              {fmt(block.chars)} {t('charsUnit')}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               ))}
@@ -453,58 +586,102 @@ export const RecordBrowser = memo(function RecordBrowser({
           </button>
         </div>
       )}
-      <div className="ch-browser-records" aria-busy={loading || filteringPending}>
-        {loading && items.length === 0 ? (
-          <p className="ch-note">{t('historyLoading')}</p>
-        ) : rows.length === 0 ? (
-          <p className="ch-note">
-            {t(!available ? 'unavailable' : query || errorsOnly ? 'noMatches' : 'noHistory')}
-          </p>
-        ) : grouped ? (
-          (['user', 'assistant', 'tool', 'event'] as const).map((kind) => {
-            const group = groupsByKind[kind]
-            if (
-              (filter === 'messages' && kind !== 'user' && kind !== 'assistant') ||
-              (filter !== 'messages' && filter !== 'all' && filter !== kind)
-            )
-              return null
-            const share = items.length > 0 ? Math.round((group.length / totalCount) * 100) : 0
-            return (
-              <section key={kind} className={`ch-record-group ch-group-${kind}`}>
-                <button
-                  type="button"
-                  className="ch-group-heading"
-                  aria-expanded={expanded.has(kind)}
-                  disabled={group.length === 0}
-                  onClick={() =>
-                    setExpanded((previous) => {
-                      const next = new Set(previous)
-                      if (next.has(kind)) next.delete(kind)
-                      else next.add(kind)
-                      return next
-                    })
-                  }
-                >
-                  <span className="ch-br-chev" aria-hidden="true">
-                    {expanded.has(kind) ? '▾' : '▸'}
-                  </span>
-                  <i className="ch-cat-sq" style={{ background: ROLE_COLOR[kind] }} />
-                  <b>{t(groupLabels[kind])}</b>
-                  <span className="ch-group-cnt">
-                    {group.length} {t('count')}
-                  </span>
-                  <span className="ch-group-pct">{share}%</span>
-                </button>
-                {expanded.has(kind) && group.length > 0 && (
-                  <div className="ch-group-body">{group.map(renderRow)}</div>
-                )}
-              </section>
-            )
-          })
-        ) : (
-          <div className="ch-group-body">{rows.map(renderRow)}</div>
-        )}
-      </div>
+
+      {layout === 'split' ? (
+        <div className="ch-split-browser" aria-busy={loading || filteringPending}>
+          <div className="ch-split-left" ref={splitLeftRef}>
+            {loading && items.length === 0 ? (
+              <p className="ch-note">{t('historyLoading')}</p>
+            ) : rows.length === 0 ? (
+              <p className="ch-note">
+                {t(!available ? 'unavailable' : query || errorsOnly ? 'noMatches' : 'noHistory')}
+              </p>
+            ) : (
+              rows.map((row) => renderRow(row, false))
+            )}
+          </div>
+          <div className="ch-split-right">
+            {selected && selectedDetail ? (
+              <InlineRecordDetail
+                key={selected.id}
+                item={selected}
+                title={selectedDetail.label}
+                pairedItem={selectedDetail.paired}
+                callArgs={selectedDetail.callArgs}
+                onFocus={onJumpRecord}
+                t={t}
+              />
+            ) : (
+              <p className="ch-note">{t('noHistory')}</p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="ch-browser-records" aria-busy={loading || filteringPending}>
+          {loading && items.length === 0 ? (
+            <p className="ch-note">{t('historyLoading')}</p>
+          ) : rows.length === 0 ? (
+            <p className="ch-note">
+              {t(!available ? 'unavailable' : query || errorsOnly ? 'noMatches' : 'noHistory')}
+            </p>
+          ) : layout === 'categories' ? (
+            (['tool', 'assistant', 'user', 'event'] as const).map((kind) => {
+              const group = groupsByKind[kind]
+              if (
+                (filter === 'messages' && kind !== 'user' && kind !== 'assistant') ||
+                (filter !== 'messages' && filter !== 'all' && filter !== kind)
+              )
+                return null
+              const groupChars = group.reduce((sum, entry) => sum + entry.text.length, 0)
+              const share =
+                totalChars > 0
+                  ? Math.round((groupChars / totalChars) * 100)
+                  : items.length > 0
+                    ? Math.round((group.length / items.length) * 100)
+                    : 0
+              return (
+                <section key={kind} className={`ch-record-group ch-group-${kind}`}>
+                  <button
+                    type="button"
+                    className="ch-group-heading"
+                    aria-expanded={expanded.has(kind)}
+                    disabled={group.length === 0}
+                    onClick={() =>
+                      setExpanded((previous) => {
+                        const next = new Set(previous)
+                        if (next.has(kind)) next.delete(kind)
+                        else next.add(kind)
+                        return next
+                      })
+                    }
+                  >
+                    <span className="ch-br-chev" aria-hidden="true">
+                      {expanded.has(kind) ? '▾' : '▸'}
+                    </span>
+                    <i className="ch-cat-sq" style={{ background: ROLE_COLOR[kind] }} />
+                    <b>{t(groupLabels[kind])}</b>
+                    <span className="ch-group-cnt">
+                      {group.length} {t('count')}
+                    </span>
+                    {groupChars > 0 && (
+                      <span className="ch-group-chars">
+                        {fmt(groupChars)} {t('charsUnit')}
+                      </span>
+                    )}
+                    <span className="ch-group-pct">{share}%</span>
+                  </button>
+                  {expanded.has(kind) && group.length > 0 && (
+                    <div className="ch-group-body">{group.map((row) => renderRow(row, true))}</div>
+                  )}
+                </section>
+              )
+            })
+          ) : (
+            <div className="ch-group-body">{rows.map((row) => renderRow(row, true))}</div>
+          )}
+        </div>
+      )}
+
       <div className="ch-record-navigation">
         <span className="ch-note">{t('shortcutsHint')}</span>
         <div>
