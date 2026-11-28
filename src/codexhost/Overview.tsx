@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import { Donut } from '../client/components/donut.tsx'
-import { fmt, fmtDuration } from '../client/format.ts'
+import { fmt } from '../client/format.ts'
 import type { SessionRow } from './api.ts'
+import { CompareTray } from './CompareTray.tsx'
 import { Card } from './components.tsx'
 import { formatUsd } from './format.ts'
 import type { Translate } from './i18n.ts'
 import { isThreadId, occupancyOf, type Usage } from './model.ts'
+import { buildOverviewCsv, buildOverviewMarkdown } from './overview-export.ts'
 import {
   aggregateOverview,
   buildDateHeatmap,
@@ -13,6 +15,7 @@ import {
   hasSessionRelation,
   workspaceLabelOf,
 } from './overview-model.ts'
+import { downloadTextFile } from './report.ts'
 
 type SortKey = 'recent' | 'tokens' | 'occupancy' | 'cost'
 
@@ -190,6 +193,7 @@ export const Overview = memo(function Overview({
   hasSelected,
   pageIndex,
   hasNext,
+  locale = 'en',
   onPrev,
   onNext,
   onSelect,
@@ -204,6 +208,7 @@ export const Overview = memo(function Overview({
   hasSelected: boolean
   pageIndex: number
   hasNext: boolean
+  locale?: string
   onPrev: () => void
   onNext: () => void
   onSelect: (id: string) => void
@@ -218,10 +223,12 @@ export const Overview = memo(function Overview({
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('recent')
   const [compareIds, setCompareIds] = useState<string[]>([])
+  const [csvState, setCsvState] = useState<'idle' | 'downloaded' | 'failed'>('idle')
+  const [mdState, setMdState] = useState<'idle' | 'copied' | 'failed'>('idle')
 
   const validRows = useMemo(() => rows.filter((row) => isThreadId(row.id)), [rows])
   const stats = useMemo(() => aggregateOverview(validRows, usageById), [validRows, usageById])
-  const heatmap = useMemo(() => buildDateHeatmap(validRows), [validRows])
+  const heatmap = useMemo(() => buildDateHeatmap(validRows, undefined, 12), [validRows])
 
   const activeWorkspace =
     workspace !== 'all' && stats.workspaces.some(([name]) => name === workspace)
@@ -265,6 +272,10 @@ export const Overview = memo(function Overview({
     setRelationsOnly(false)
     setCompareIds([])
   }, [pageIndex])
+  useEffect(() => {
+    setCsvState('idle')
+    setMdState('idle')
+  }, [pageIndex, activeWorkspace, activeHarness, activeDate, highOnly, relationsOnly, query, sort])
 
   const toggleCompare = useCallback(
     (id: string): void => {
@@ -455,15 +466,15 @@ export const Overview = memo(function Overview({
             <p className="ch-note ch-ov-empty-center">{t('unavailable')}</p>
           ) : (
             <>
-              <div className="ch-ov-bars-plot">
+              <div className="ch-ov-hbars">
                 {stats.topSessions.map((item) => {
-                  const tokenHeight =
+                  const tokenWidth =
                     item.tokens !== null && item.tokens > 0
-                      ? Math.max(8, (item.tokens / maxBarTokens) * 100)
+                      ? Math.max(4, (item.tokens / maxBarTokens) * 100)
                       : 0
-                  const occHeight =
+                  const occWidth =
                     item.occupancyPercent !== null
-                      ? Math.max(8, Math.min(100, item.occupancyPercent))
+                      ? Math.max(3, Math.min(100, item.occupancyPercent))
                       : 0
                   const occTone =
                     item.occupancyPercent !== null && item.occupancyPercent >= 85
@@ -472,28 +483,35 @@ export const Overview = memo(function Overview({
                         ? 'is-warn'
                         : 'is-ok'
                   const tokenLabel = item.tokens === null ? '—' : fmt(item.tokens)
+                  const occLabel =
+                    item.occupancyPercent === null ? '—' : `${item.occupancyPercent.toFixed(1)}%`
                   return (
                     <button
                       key={item.id}
                       type="button"
-                      className="ch-ov-bcol"
-                      title={`${item.title}: ${tokenLabel} · ${item.occupancyPercent === null ? '—' : `${item.occupancyPercent.toFixed(1)}%`}`}
+                      className="ch-ov-hrow"
+                      title={`${item.title}: ${tokenLabel} · ${occLabel}`}
                       onClick={() => onSelect(item.id)}
                     >
-                      <div className="ch-ov-bpair">
-                        {tokenHeight > 0 && item.tokens !== null && (
-                          <div className="ch-ov-bar is-tok" style={{ height: `${tokenHeight}%` }}>
-                            <span>{fmt(item.tokens)}</span>
-                          </div>
-                        )}
-                        {occHeight > 0 && (
-                          <div
-                            className={`ch-ov-bar ${occTone}`}
-                            style={{ height: `${occHeight}%` }}
-                          />
-                        )}
+                      <div className="ch-ov-hrow-top">
+                        <span className="ch-ov-hrow-title">{item.title}</span>
+                        <span className="ch-ov-hrow-vals">
+                          <b>{tokenLabel}</b>
+                          <em className={occTone}>{occLabel}</em>
+                        </span>
                       </div>
-                      <span className="ch-ov-blbl">{item.title}</span>
+                      <div className="ch-ov-htracks">
+                        <div className="ch-ov-htrack">
+                          {tokenWidth > 0 && (
+                            <i className="is-tok" style={{ width: `${tokenWidth}%` }} />
+                          )}
+                        </div>
+                        <div className="ch-ov-htrack">
+                          {occWidth > 0 && (
+                            <i className={occTone} style={{ width: `${occWidth}%` }} />
+                          )}
+                        </div>
+                      </div>
                     </button>
                   )
                 })}
@@ -504,7 +522,7 @@ export const Overview = memo(function Overview({
                   {t('sortTokens')}
                 </span>
                 <span>
-                  <i style={{ background: 'var(--ch-green)' }} />
+                  <i style={{ background: 'var(--ch-teal)' }} />
                   {t('sortOccupancy')}
                 </span>
               </div>
@@ -564,28 +582,36 @@ export const Overview = memo(function Overview({
           ) : (
             <div className="ch-heat-wrap">
               <div className="ch-heat-cols">
-                {heatmap.weeks.map((week, weekIndex) => (
-                  <div key={weekIndex} className="ch-heat-col">
-                    <span className="ch-heat-mon">{week.monthLabel ?? ''}</span>
-                    {week.days.map((day) =>
-                      day.isFuture ? (
-                        <span key={day.dateKey} className="ch-heat-cell is-future" />
-                      ) : (
-                        <button
-                          key={day.dateKey}
-                          type="button"
-                          className={`ch-heat-cell is-lv${day.level} ${activeDate === day.dateKey ? 'is-on' : ''}`}
-                          disabled={day.count === 0}
-                          title={`${day.dateKey}: ${day.count}`}
-                          aria-label={`${day.dateKey}: ${day.count}`}
-                          onClick={() =>
-                            setSelectedDate((prev) => (prev === day.dateKey ? null : day.dateKey))
-                          }
-                        />
-                      ),
-                    )}
-                  </div>
-                ))}
+                {heatmap.weeks.map((week, weekIndex) => {
+                  const prevHadLabel =
+                    weekIndex > 0 && heatmap.weeks[weekIndex - 1]?.monthLabel !== undefined
+                  const monText =
+                    week.monthLabel && !prevHadLabel
+                      ? `${week.monthLabel}${t('monthSuffix')}`
+                      : ''
+                  return (
+                    <div key={weekIndex} className="ch-heat-col">
+                      <span className="ch-heat-mon">{monText}</span>
+                      {week.days.map((day) =>
+                        day.isFuture ? (
+                          <span key={day.dateKey} className="ch-heat-cell is-future" />
+                        ) : (
+                          <button
+                            key={day.dateKey}
+                            type="button"
+                            className={`ch-heat-cell is-lv${day.level} ${activeDate === day.dateKey ? 'is-on' : ''}`}
+                            disabled={day.count === 0}
+                            title={`${day.dateKey}: ${day.count}`}
+                            aria-label={`${day.dateKey}: ${day.count}`}
+                            onClick={() =>
+                              setSelectedDate((prev) => (prev === day.dateKey ? null : day.dateKey))
+                            }
+                          />
+                        ),
+                      )}
+                    </div>
+                  )
+                })}
               </div>
               <div className="ch-heat-legend">
                 <span>{t('lessLabel')}</span>
@@ -684,107 +710,15 @@ export const Overview = memo(function Overview({
         </Card>
       </section>
 
-      {comparedRows.length > 0 && (
-        <Card
-          title={`${t('compareTrayTitle')} (${comparedRows.length}/3)`}
-          className="ch-compare-tray"
-          aside={
-            <button type="button" className="ch-mini-button" onClick={() => setCompareIds([])}>
-              {t('clearCompare')}
-            </button>
-          }
-        >
-          <div className="ch-compare-scroll">
-            <table className="ch-compare-table">
-              <thead>
-                <tr>
-                  <th>{t('metricLabel')}</th>
-                  {comparedRows.map((row) => (
-                    <th key={row.id}>
-                      <div className="ch-compare-th">
-                        <button type="button" className="ch-link-btn" onClick={() => onSelect(row.id)}>
-                          {row.title || row.id}
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-mini-button"
-                          aria-label={`${t('clearCompare')}: ${row.title || row.id}`}
-                          onClick={() => toggleCompare(row.id)}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>{t('occupancy')}</td>
-                  {comparedRows.map((row) => {
-                    const occ = occupancyOf(usageById.get(row.id) ?? null)
-                    return (
-                      <td key={row.id}>
-                        <b>{occ ? `${occ.percent.toFixed(1)}%` : '—'}</b>
-                        {occ?.used !== undefined && occ.capacity !== undefined
-                          ? ` (${fmt(occ.used)}/${fmt(occ.capacity)})`
-                          : ''}
-                      </td>
-                    )
-                  })}
-                </tr>
-                <tr>
-                  <td>{t('total')}</td>
-                  {comparedRows.map((row) => (
-                    <td key={row.id}>{fmt(usageById.get(row.id)?.totalTokens)}</td>
-                  ))}
-                </tr>
-                <tr>
-                  <td>{t('cacheHit')}</td>
-                  {comparedRows.map((row) => {
-                    const u = usageById.get(row.id)
-                    const rate = u?.cacheHitRatePercent ?? u?.sessionCacheHitRatePercent
-                    return <td key={row.id}>{rate === undefined ? '—' : `${rate.toFixed(1)}%`}</td>
-                  })}
-                </tr>
-                <tr>
-                  <td>{t('cost')}</td>
-                  {comparedRows.map((row) => {
-                    const u = usageById.get(row.id)
-                    return (
-                      <td key={row.id}>
-                        {u?.totalCostUsd === undefined
-                          ? '—'
-                          : `${(u.unpricedModels?.length ?? 0) > 0 ? '≥ ' : ''}${formatUsd(u.totalCostUsd)}`}
-                      </td>
-                    )
-                  })}
-                </tr>
-                <tr>
-                  <td>{t('tps')}</td>
-                  {comparedRows.map((row) => {
-                    const u = usageById.get(row.id)
-                    const speed = u?.outputTokensPerSecond ?? u?.sessionOutputTokensPerSecond
-                    return <td key={row.id}>{speed === undefined ? '—' : `${speed.toFixed(1)} tok/s`}</td>
-                  })}
-                </tr>
-                <tr>
-                  <td>{t('ttft')}</td>
-                  {comparedRows.map((row) => {
-                    const u = usageById.get(row.id)
-                    const ttft = u?.latestRequestTimeToFirstOutputMs ?? u?.timeToFirstOutputMs
-                    return (
-                      <td key={row.id}>
-                        {ttft === undefined ? '—' : ttft === 0 ? '0ms' : fmtDuration(ttft)}
-                      </td>
-                    )
-                  })}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+      <CompareTray
+        comparedRows={comparedRows}
+        usageById={usageById}
+        locale={locale}
+        onSelect={onSelect}
+        onToggleCompare={toggleCompare}
+        onClear={() => setCompareIds([])}
+        t={t}
+      />
 
       <section className="ch-card ch-ov-gallery">
         <div className="ch-ov-toolbar">
@@ -839,6 +773,48 @@ export const Overview = memo(function Overview({
                 </button>
               ))}
             </div>
+            {visible.length > 0 && (
+              <div className="ch-ov-exports">
+                <button
+                  type="button"
+                  className="ch-mini-button"
+                  onClick={() => {
+                    const ok = downloadTextFile(
+                      `ch-context-overview-p${pageIndex + 1}.csv`,
+                      buildOverviewCsv(visible, usageById),
+                      'text/csv;charset=utf-8',
+                    )
+                    setCsvState(ok ? 'downloaded' : 'failed')
+                  }}
+                >
+                  {csvState === 'downloaded'
+                    ? t('reportDownloaded')
+                    : csvState === 'failed'
+                      ? t('copyFailed')
+                      : t('exportCsv')}
+                </button>
+                <button
+                  type="button"
+                  className="ch-mini-button"
+                  onClick={() => {
+                    if (!navigator.clipboard?.writeText) {
+                      setMdState('failed')
+                      return
+                    }
+                    void navigator.clipboard
+                      .writeText(buildOverviewMarkdown(visible, usageById, locale))
+                      .then(() => setMdState('copied'))
+                      .catch(() => setMdState('failed'))
+                  }}
+                >
+                  {mdState === 'copied'
+                    ? t('copied')
+                    : mdState === 'failed'
+                      ? t('copyFailed')
+                      : t('exportOverviewMd')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

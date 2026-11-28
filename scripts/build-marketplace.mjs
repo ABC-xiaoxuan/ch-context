@@ -15,6 +15,7 @@ await build({
   format: 'esm',
   target: 'es2022',
   jsx: 'automatic',
+  loader: { '.woff2': 'binary' },
   define: {
     'process.env.NODE_ENV': '"production"',
     __CH_CONTEXT_VERSION__: JSON.stringify(pkg.version),

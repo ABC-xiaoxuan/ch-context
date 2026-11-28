@@ -1,11 +1,13 @@
 import {
   useCallback,
   useDeferredValue,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent,
   type ReactElement,
+  type RefObject,
 } from 'react'
 import type { HistoryItem, SessionRow } from './api.ts'
 import { pairedRecordIds, summarizeActivity, type ActivitySummary } from './activity.ts'
@@ -24,6 +26,7 @@ import type { useHistory, useUsage } from './hooks.ts'
 import type { Translate } from './i18n.ts'
 
 const EMPTY_ITEMS: readonly HistoryItem[] = []
+type DockTab = 'all' | 'files' | 'commands' | 'network'
 
 function isEditableTarget(event: KeyboardEvent<HTMLDivElement>): boolean {
   const path = event.nativeEvent.composedPath?.() ?? [event.target]
@@ -44,6 +47,8 @@ export function Inspector({
   selected,
   currentTitle,
   currentHarness,
+  scrollContainerRef,
+  onHeroVisibility,
   onSelect,
   retry,
   t,
@@ -55,11 +60,14 @@ export function Inspector({
   selected: string
   currentTitle: string
   currentHarness: string
+  scrollContainerRef?: RefObject<HTMLDivElement | null>
+  onHeroVisibility?: (hidden: boolean) => void
   onSelect: (id: string) => void
   retry: () => void
   t: Translate
 }): ReactElement {
   const root = useRef<HTMLDivElement>(null)
+  const heroRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [focus, setFocus] = useState<string | undefined>()
   const [filter, setFilter] = useState<RecordFilter>('all')
@@ -67,7 +75,26 @@ export function Inspector({
   const [errorsOnly, setErrorsOnly] = useState(false)
   const [fileFilter, setFileFilter] = useState<FileFilter>('all')
   const [cmdProgram, setCmdProgram] = useState<string | null>(null)
+  const [dockTab, setDockTab] = useState<DockTab>('all')
   const deferredQuery = useDeferredValue(query)
+
+  useEffect(() => {
+    const hero = heroRef.current
+    if (!hero || !onHeroVisibility || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries.at(-1)
+        if (entry) onHeroVisibility(!entry.isIntersecting)
+      },
+      { root: scrollContainerRef?.current ?? null, threshold: 0.1 },
+    )
+    observer.observe(hero)
+    return () => {
+      observer.disconnect()
+      onHeroVisibility(false)
+    }
+  }, [onHeroVisibility, scrollContainerRef])
+
   const fallbackSummary = useMemo(
     () =>
       providedSummary !== undefined
@@ -93,6 +120,15 @@ export function Inspector({
   const filteredItems = useMemo(
     () => filterIndexedRecords(items, recordIndex, filter, deferredQuery, errorsOnly),
     [items, recordIndex, filter, deferredQuery, errorsOnly],
+  )
+  const hasActiveFilter = filter !== 'all' || deferredQuery.trim().length > 0 || errorsOnly
+  const matchedIds = useMemo(
+    () => (hasActiveFilter ? new Set(filteredItems.map((item) => item.id)) : undefined),
+    [hasActiveFilter, filteredItems],
+  )
+  const failedCmdCount = useMemo(
+    () => (summary?.commands ?? []).filter((command) => command.isError === true).length,
+    [summary],
   )
   const reveal = useCallback((selector: string): void => {
     requestAnimationFrame(() =>
@@ -139,22 +175,28 @@ export function Inspector({
   const jumpFiles = useCallback(
     (nextFileFilter: FileFilter = 'all') => {
       setFileFilter(nextFileFilter)
+      setDockTab((prev) => (prev === 'all' ? 'all' : 'files'))
       reveal('.ch-file-card')
     },
     [reveal],
   )
   const jumpCommands = useCallback(() => {
     setCmdProgram(null)
+    setDockTab((prev) => (prev === 'all' ? 'all' : 'commands'))
     reveal('.ch-command-card')
   }, [reveal])
   const jumpProgram = useCallback(
     (program: string) => {
       setCmdProgram(program)
+      setDockTab((prev) => (prev === 'all' ? 'all' : 'commands'))
       reveal('.ch-command-card')
     },
     [reveal],
   )
-  const jumpNetwork = useCallback(() => reveal('.ch-family-card'), [reveal])
+  const jumpNetwork = useCallback(() => {
+    setDockTab((prev) => (prev === 'all' ? 'all' : 'network'))
+    reveal('.ch-family-card')
+  }, [reveal])
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.metaKey || event.ctrlKey || event.altKey) return
     const editable = isEditableTarget(event)
@@ -186,43 +228,48 @@ export function Inspector({
   }
   return (
     <div className="ch-inspector" ref={root} tabIndex={-1} onKeyDown={handleKeyDown}>
-      <ContextStatsCard
-        usage={usage.usage}
-        summary={summary}
-        items={items}
-        related={related}
-        onJumpTimeline={jumpTimeline}
-        onJumpBrowser={jumpBrowser}
-        onJumpTool={jumpTool}
-        onJumpErrors={jumpErrors}
-        onJumpFiles={jumpFiles}
-        onJumpCommands={jumpCommands}
-        onJumpProgram={jumpProgram}
-        onJumpNetwork={jumpNetwork}
-        t={t}
-      />
-
-      <div className="ch-pair-grid">
-        <UsageCard usage={usage.usage} t={t} />
-        <PerformanceCard
-          usage={usage.usage}
-          items={items}
-          onSelectRecord={selectRecord}
-          t={t}
-        />
-      </div>
-
-      <div className="ch-workbench">
-        <div className="ch-workbench-left">
+      <div className="ch-hero-grid">
+        <div ref={heroRef} className="ch-hero-slot">
           <ContextCard
             usage={usage.usage}
             samples={usage.samples}
             harness={currentHarness}
             t={t}
           />
+        </div>
+        <UsageCard usage={usage.usage} t={t} />
+      </div>
+
+      <div className="ch-pair-grid">
+        <PerformanceCard
+          usage={usage.usage}
+          items={items}
+          onSelectRecord={selectRecord}
+          t={t}
+        />
+        <ContextStatsCard
+          summary={summary}
+          items={items}
+          related={related}
+          onJumpTimeline={jumpTimeline}
+          onJumpBrowser={jumpBrowser}
+          onJumpTool={jumpTool}
+          onJumpErrors={jumpErrors}
+          onJumpFiles={jumpFiles}
+          onJumpCommands={jumpCommands}
+          onJumpProgram={jumpProgram}
+          onJumpNetwork={jumpNetwork}
+          onFocusRecord={selectRecord}
+          t={t}
+        />
+      </div>
+
+      <div className="ch-workbench">
+        <div className="ch-workbench-left">
           <ActivityTimeline
             items={items}
             pairs={pairs}
+            matchedIds={matchedIds}
             available={history.page !== null}
             loading={history.loading}
             focus={focus}
@@ -259,32 +306,62 @@ export function Inspector({
         />
       </div>
 
-      <FileActivityCard
-        summary={summary}
-        items={items}
-        filter={fileFilter}
-        onFilter={setFileFilter}
-        onFocus={selectRecord}
-        t={t}
-      />
+      <div className="ch-dock-bar" role="tablist" aria-label={t('activityStats')}>
+        {(
+          [
+            ['all', t('dockAll'), null, false],
+            ['files', t('files'), summary ? summary.files.length : null, false],
+            ['commands', t('commands'), summary ? summary.commands.length : null, failedCmdCount > 0],
+            ['network', t('loadedFamily'), related.length, false],
+          ] as const
+        ).map(([key, label, count, hasErr]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={dockTab === key}
+            className={`ch-dock-tab ${dockTab === key ? 'is-active' : ''}`}
+            onClick={() => setDockTab(key)}
+          >
+            <span>{label}</span>
+            {count !== null && <b className="ch-dock-cnt">{count}</b>}
+            {hasErr && <i className="ch-dock-err-dot" aria-hidden="true" />}
+          </button>
+        ))}
+      </div>
 
-      <CommandExecutionsCard
-        summary={summary}
-        items={items}
-        selectedProgram={cmdProgram}
-        onSelectProgram={setCmdProgram}
-        onFocus={selectRecord}
-        t={t}
-      />
+      {(dockTab === 'all' || dockTab === 'files') && (
+        <FileActivityCard
+          summary={summary}
+          items={items}
+          filter={fileFilter}
+          onFilter={setFileFilter}
+          onFocus={selectRecord}
+          t={t}
+        />
+      )}
 
-      <SessionNetworkCard
-        related={related}
-        currentTitle={currentTitle}
-        currentHarness={currentHarness}
-        currentUsage={usage.usage}
-        onSelect={onSelect}
-        t={t}
-      />
+      {(dockTab === 'all' || dockTab === 'commands') && (
+        <CommandExecutionsCard
+          summary={summary}
+          items={items}
+          selectedProgram={cmdProgram}
+          onSelectProgram={setCmdProgram}
+          onFocus={selectRecord}
+          t={t}
+        />
+      )}
+
+      {(dockTab === 'all' || dockTab === 'network') && (
+        <SessionNetworkCard
+          related={related}
+          currentTitle={currentTitle}
+          currentHarness={currentHarness}
+          currentUsage={usage.usage}
+          onSelect={onSelect}
+          t={t}
+        />
+      )}
 
       <p className="ch-data-note">ⓘ {t('limitsNote')}</p>
     </div>

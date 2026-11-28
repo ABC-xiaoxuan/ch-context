@@ -17,6 +17,7 @@ await build({
   platform: 'browser',
   format: 'iife',
   jsx: 'automatic',
+  loader: { '.woff2': 'binary' },
   define: { 'process.env.NODE_ENV': '"production"' },
 })
 const html =
@@ -213,11 +214,41 @@ try {
     await page.locator('.ch-source-text').textContent(),
     ' {"id":9007199254740993,"dup":1,"dup":2} ',
   )
+  await page.locator('.ch-record-detail').getByRole('button', { name: 'JSON', exact: true }).click()
+  assert.equal(await page.locator('.ch-json-tree .ch-json-key').count(), 3)
+  assert.equal(
+    await page.locator('.ch-json-tree .ch-json-num').first().textContent(),
+    '9007199254740993',
+  )
+  await page.locator('.ch-expand-toggle').first().click()
+  await page.locator('.ch-reader-dialog').waitFor()
+  const modalBox = await page.locator('.ch-reader-dialog').boundingBox()
+  assert.ok(modalBox && modalBox.width > 600)
+  await page.keyboard.press(']')
+  await page.keyboard.press('/')
+  assert.equal(await page.locator('.ch-reader-dialog').count(), 1)
+  await page.locator('.ch-reader-dialog .ch-find-toggle').click()
+  await page.locator('.ch-reader-dialog .ch-find-bar input').waitFor()
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('.ch-reader-dialog .ch-find-bar').count(), 0)
+  assert.equal(await page.locator('.ch-reader-dialog').count(), 1)
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('.ch-reader-dialog').count(), 0)
+  await page.locator('.ch-record-detail').getByRole('button', { name: 'Raw text', exact: true }).click()
   await page.locator('.ch-record-detail').getByRole('button', { name: 'Copy', exact: true }).click()
   assert.equal(
     await page.evaluate(() => navigator.clipboard.readText()),
     ' {"id":9007199254740993,"dup":1,"dup":2} ',
   )
+  await page.locator('.ch-hotspot-row').first().click()
+  await record(9)
+  await page.locator('.ch-dock-bar').getByRole('tab', { name: /File activity/ }).click()
+  assert.equal(await page.locator('.ch-file-card').count(), 1)
+  assert.equal(await page.locator('.ch-command-card').count(), 0)
+  await page.locator('.ch-dock-bar').getByRole('tab', { name: 'All panels', exact: true }).click()
+  assert.equal(await page.locator('.ch-command-card').count(), 1)
+  await page.locator('.ch-command-result').first().click()
+  await record(8)
   await page.getByRole('button', { name: 'Find in record', exact: true }).click()
   await page.getByRole('textbox', { name: 'Find in this record…', exact: true }).fill('dup')
   await page.waitForFunction(
@@ -282,6 +313,7 @@ try {
     .locator('.ch-browser-card .ch-filter')
     .getByRole('button', { name: 'Messages', exact: true })
     .click()
+  await page.locator('.ch-tl-filter-badge').waitFor()
   await record(13)
   await page.evaluate(() => window.chFixture.setChildHistoryFailure(true))
   await page.locator('.ch-family-row').first().click()
@@ -556,6 +588,13 @@ try {
   await page.locator('.ch-compare-pin').nth(1).click()
   await page.locator('.ch-compare-tray').waitFor()
   assert.equal(await page.locator('.ch-compare-table thead th').count(), 3)
+  await page.getByRole('button', { name: 'Copy Markdown', exact: true }).click()
+  assert.match(await page.evaluate(() => navigator.clipboard.readText()), /Context occupancy/)
+  await page.getByRole('button', { name: 'Copy summary MD', exact: true }).click()
+  assert.match(
+    await page.evaluate(() => navigator.clipboard.readText()),
+    /Context Insights · Conversations Summary/,
+  )
   await page.getByRole('button', { name: 'Clear', exact: true }).click()
   assert.equal(await page.locator('.ch-compare-tray').count(), 0)
   assert.equal(await page.locator('[data-conversation-scroll][data-ch-context-surface]').count(), 0)

@@ -22,6 +22,7 @@ const output = await build({
   target: 'es2022',
   jsx: 'automatic',
   external: ['react', 'react/jsx-runtime', 'react-dom'],
+  loader: { '.woff2': 'binary' },
   plugins: [minifyCssText],
   define: {
     'process.env.NODE_ENV': '"production"',

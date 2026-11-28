@@ -48,6 +48,7 @@ function laneY(kind: HistoryItem['kind']): number {
 export const ActivityTimeline = memo(function ActivityTimeline({
   items,
   pairs,
+  matchedIds,
   available,
   loading,
   focus,
@@ -56,6 +57,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
 }: {
   items: readonly HistoryItem[]
   pairs: ReadonlyMap<string, string>
+  matchedIds?: ReadonlySet<string>
   available: boolean
   loading: boolean
   focus?: string
@@ -155,6 +157,7 @@ export const ActivityTimeline = memo(function ActivityTimeline({
           const cx = eventX(index, items.length)
           const y = laneY(item.kind) - 8
           const fill = item.isError === true ? 'var(--ch-danger)' : ROLE_COLOR[item.kind]
+          const dimmed = matchedIds !== undefined && !matchedIds.has(item.id)
           return (
             <g key={item.id}>
               <rect
@@ -164,17 +167,25 @@ export const ActivityTimeline = memo(function ActivityTimeline({
                 height={16}
                 rx="2.5"
                 fill={fill}
-                opacity={0.72}
+                opacity={dimmed ? 0.16 : matchedIds !== undefined ? 0.94 : 0.76}
               />
               {item.isError === true && (
-                <rect x={cx - 4} y={4} width={8} height={8} rx={4} fill="var(--ch-danger)" />
+                <rect
+                  x={cx - 4}
+                  y={4}
+                  width={8}
+                  height={8}
+                  rx={4}
+                  fill="var(--ch-danger)"
+                  opacity={dimmed ? 0.2 : 1}
+                />
               )}
             </g>
           )
         })}
       </>
     ),
-    [items, turns, bridges, markerWidth],
+    [items, turns, bridges, markerWidth, matchedIds],
   )
   const previewPairId = preview ? pairs.get(preview.id) : undefined
   const previewPair = previewPairId ? items[indexById.get(previewPairId) ?? -1] : undefined
@@ -206,10 +217,17 @@ export const ActivityTimeline = memo(function ActivityTimeline({
       title={t('activityTimeline')}
       className="ch-activity-timeline"
       aside={
-        <span className="ch-card-rate">
-          {items.length ? `${items.length}` : '—'} {t('count')}
-          {turns.length > 0 ? ` · ${turns.length} ${t('turnsCount')}` : ''}
-        </span>
+        <div className="ch-tl-aside">
+          {matchedIds !== undefined && (
+            <span className="ch-tl-filter-badge">
+              {t('filteredTimelineHint')} · <b>{matchedIds.size}</b>
+            </span>
+          )}
+          <span className="ch-card-rate">
+            {items.length ? `${items.length}` : '—'} {t('count')}
+            {turns.length > 0 ? ` · ${turns.length} ${t('turnsCount')}` : ''}
+          </span>
+        </div>
       }
     >
       {items.length === 0 ? (
@@ -285,21 +303,20 @@ export const ActivityTimeline = memo(function ActivityTimeline({
               </svg>
             </div>
           </div>
-          {turns.length > 0 && turns.length <= 24 && (
+          {turns.length >= 2 && turns.length <= 24 && (
             <div className="ch-turn-strip" role="group" aria-label={t('turnsLabel')}>
               {turns.map((turn) => (
                 <button
                   key={turn.turn}
                   type="button"
                   className={`ch-turn-pill ${turn.turn === activeTurn ? 'is-active' : ''}`}
-                  style={{ flex: Math.max(1, turn.end - turn.start + 1) }}
                   title={`${t('turnShort')} ${turn.turn}`}
                   onClick={() => {
                     const target = items[turn.end]
                     if (target) onFocus(target.id)
                   }}
                 >
-                  {turn.turn}
+                  T{turn.turn}
                 </button>
               ))}
             </div>

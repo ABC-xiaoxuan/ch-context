@@ -13,7 +13,8 @@ import {
   useUsage,
   type ViewContext,
 } from './hooks.ts'
-import { isThreadId, recordOf } from './model.ts'
+import { fmt } from '../client/format.ts'
+import { isThreadId, occupancyOf, recordOf } from './model.ts'
 import { translator } from './i18n.ts'
 import { relatedSessions } from './relationships.ts'
 import {
@@ -23,15 +24,23 @@ import {
   safeFileSlug,
 } from './report.ts'
 import { useConversationSurface } from './conversation-surface.ts'
+import { acquireBundledFonts } from './fonts.ts'
 
 const EMPTY_ROWS: readonly SessionRow[] = []
 const EMPTY_ITEMS: readonly HistoryItem[] = []
+
+export type PaletteTheme = 'graphite' | 'paper' | 'slate'
+export type DensityMode = 'comfortable' | 'compact'
+export type FontPreset = 'modern' | 'mono-metrics' | 'system'
 
 export interface AppProps {
   ctx: ViewContext
   sessionId?: string
   projection?: unknown
   embedded?: boolean
+  palette?: PaletteTheme
+  density?: DensityMode
+  font?: FontPreset
   headerActions?: ReactNode
 }
 
@@ -40,16 +49,21 @@ export function App({
   sessionId,
   projection,
   embedded = false,
+  palette = 'graphite',
+  density = 'comfortable',
+  font = 'modern',
   headerActions,
 }: AppProps): ReactElement {
   const surface = useRef<HTMLDivElement>(null)
   useConversationSurface(surface, embedded)
+  useEffect(() => acquireBundledFonts(surface.current?.ownerDocument), [])
   const locale = useLocale(ctx)
   const t = useMemo(() => translator(locale), [locale])
   const current = useCurrentSession(ctx)
   const [picked, setPicked] = useState<string | undefined>()
   const [chooserOpen, setChooserOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  const [heroHidden, setHeroHidden] = useState(false)
   const [mode, setMode] = useState<'overview' | 'inspector'>('inspector')
   const candidate = sessionId ?? picked ?? current
   const selected = isThreadId(candidate) ? candidate : undefined
@@ -91,7 +105,8 @@ export function App({
     setCopied('idle')
     setExportStatus('idle')
     setExportOpen(false)
-  }, [selected])
+    setHeroHidden(false)
+  }, [selected, activeView])
   const refresh = useCallback((): void => setRevision((value) => value + 1), [])
   const select = useCallback(
     (id: string): void => {
@@ -167,10 +182,20 @@ export function App({
     setExportStatus(ok ? 'downloaded' : 'failed')
     setExportOpen(false)
   }
+  const stickyOcc = activeView === 'inspector' && heroHidden ? occupancyOf(usage.usage) : null
+  const stickyTone =
+    stickyOcc && stickyOcc.percent >= 85
+      ? 'is-danger'
+      : stickyOcc && stickyOcc.percent >= 65
+        ? 'is-warn'
+        : ''
   return (
     <div
       ref={surface}
       className={`ch-context ${embedded ? 'ch-embedded' : ''}`}
+      data-ch-palette={palette}
+      data-ch-density={density}
+      data-ch-font={font}
       lang={locale.startsWith('zh') ? 'zh-CN' : 'en'}
     >
       <div className="ch-shell">
@@ -233,112 +258,127 @@ export function App({
                     {workspaceName && <span className="ch-meta-tag is-muted">{workspaceName}</span>}
                     <small aria-hidden="true">▾</small>
                   </summary>
-                  <div className="ch-session-picker-body">
-                    <div className="ch-picker-header">
-                      <label className="ch-search">
-                        <span aria-hidden="true">⌕</span>
-                        <input
-                          value={query}
-                          onChange={(event) => setQuery(event.target.value)}
-                          placeholder={t('search')}
-                          aria-label={t('search')}
-                        />
-                      </label>
-                      {isThreadId(current) && (
-                        <button
-                          type="button"
-                          className="ch-mini-button"
-                          onClick={() => {
-                            setPicked(undefined)
-                            setMode('inspector')
-                            setChooserOpen(false)
-                          }}
-                        >
-                          {t('following')}
-                        </button>
+                  {chooserOpen && (
+                    <div className="ch-session-picker-body">
+                      <div className="ch-picker-header">
+                        <label className="ch-search">
+                          <span aria-hidden="true">⌕</span>
+                          <input
+                            value={query}
+                            onChange={(event) => setQuery(event.target.value)}
+                            placeholder={t('search')}
+                            aria-label={t('search')}
+                          />
+                        </label>
+                        {isThreadId(current) && (
+                          <button
+                            type="button"
+                            className="ch-mini-button"
+                            onClick={() => {
+                              setPicked(undefined)
+                              setMode('inspector')
+                              setChooserOpen(false)
+                            }}
+                          >
+                            {t('following')}
+                          </button>
+                        )}
+                      </div>
+                      {list.error ? (
+                        <div className="ch-error" role="alert">
+                          {t('listError')}
+                          <span>{list.error}</span>
+                          <button type="button" className="ch-mini-button" onClick={refresh}>
+                            {t('retry')}
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="ch-session-list" role="list">
+                            {list.loading ? (
+                              <div
+                                className="ch-skeleton ch-session-skeleton"
+                                aria-label={t('loading')}
+                              />
+                            ) : filtered.length === 0 ? (
+                              <p className="ch-note">{t('emptyList')}</p>
+                            ) : (
+                              filtered.map((item) => (
+                                <div key={item.id} role="listitem">
+                                  <button
+                                    type="button"
+                                    className={`ch-session ${selected === item.id ? 'is-selected' : ''}`}
+                                    aria-pressed={selected === item.id}
+                                    title={item.title}
+                                    onClick={() => select(item.id)}
+                                  >
+                                    <span className="ch-session-marker" />
+                                    <span className="ch-session-title">
+                                      {item.title || item.id}
+                                      <small title={item.cwd}>
+                                        {item.harness ?? 'CodexHost'}
+                                        {item.cwd
+                                          ? ` · ${item.cwd.split(/[\\/]/).filter(Boolean).at(-1)}`
+                                          : ''}
+                                      </small>
+                                    </span>
+                                    <span aria-hidden="true">↗</span>
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                          <div className="ch-pagination">
+                            <small>{t('loadedSearch')}</small>
+                            <div>
+                              <button
+                                type="button"
+                                className="ch-mini-button"
+                                disabled={pageIndex === 0 || list.loading}
+                                onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
+                              >
+                                {t('previous')}
+                              </button>
+                              <span>
+                                {t('page')} {pageIndex + 1}
+                              </span>
+                              <button
+                                type="button"
+                                className="ch-mini-button"
+                                disabled={!list.page?.nextCursor || list.loading}
+                                onClick={() => {
+                                  const next = list.page?.nextCursor
+                                  if (!next) return
+                                  setCursors((values) => [...values.slice(0, pageIndex + 1), next])
+                                  setPageIndex((value) => value + 1)
+                                }}
+                              >
+                                {t('next')}
+                              </button>
+                            </div>
+                          </div>
+                        </>
                       )}
                     </div>
-                    {list.error ? (
-                      <div className="ch-error" role="alert">
-                        {t('listError')}
-                        <span>{list.error}</span>
-                        <button type="button" className="ch-mini-button" onClick={refresh}>
-                          {t('retry')}
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="ch-session-list" role="list">
-                          {list.loading ? (
-                            <div
-                              className="ch-skeleton ch-session-skeleton"
-                              aria-label={t('loading')}
-                            />
-                          ) : filtered.length === 0 ? (
-                            <p className="ch-note">{t('emptyList')}</p>
-                          ) : (
-                            filtered.map((item) => (
-                              <div key={item.id} role="listitem">
-                                <button
-                                  type="button"
-                                  className={`ch-session ${selected === item.id ? 'is-selected' : ''}`}
-                                  aria-pressed={selected === item.id}
-                                  title={item.title}
-                                  onClick={() => select(item.id)}
-                                >
-                                  <span className="ch-session-marker" />
-                                  <span className="ch-session-title">
-                                    {item.title || item.id}
-                                    <small title={item.cwd}>
-                                      {item.harness ?? 'CodexHost'}
-                                      {item.cwd
-                                        ? ` · ${item.cwd.split(/[\\/]/).filter(Boolean).at(-1)}`
-                                        : ''}
-                                    </small>
-                                  </span>
-                                  <span aria-hidden="true">↗</span>
-                                </button>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                        <div className="ch-pagination">
-                          <small>{t('loadedSearch')}</small>
-                          <div>
-                            <button
-                              type="button"
-                              className="ch-mini-button"
-                              disabled={pageIndex === 0 || list.loading}
-                              onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
-                            >
-                              {t('previous')}
-                            </button>
-                            <span>
-                              {t('page')} {pageIndex + 1}
-                            </span>
-                            <button
-                              type="button"
-                              className="ch-mini-button"
-                              disabled={!list.page?.nextCursor || list.loading}
-                              onClick={() => {
-                                const next = list.page?.nextCursor
-                                if (!next) return
-                                setCursors((values) => [...values.slice(0, pageIndex + 1), next])
-                                setPageIndex((value) => value + 1)
-                              }}
-                            >
-                              {t('next')}
-                            </button>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  )}
                 </details>
               </>
             )}
           </div>
           <div className="ch-heading-actions">
+            {stickyOcc && (
+              <span className={`ch-sticky-pill ${stickyTone}`} title={t('occupancy')}>
+                <i className="ch-sticky-bar">
+                  <em style={{ width: `${Math.min(100, stickyOcc.percent)}%` }} />
+                </i>
+                <b>{stickyOcc.percent.toFixed(1)}%</b>
+                {stickyOcc.used !== undefined && stickyOcc.capacity !== undefined && (
+                  <small>
+                    {fmt(stickyOcc.used)}/{fmt(stickyOcc.capacity)}
+                  </small>
+                )}
+              </span>
+            )}
             {headerActions}
             {selected && activeView === 'inspector' && (
               <span className={`ch-status ${usage.connected ? '' : 'is-offline'}`}>
@@ -424,6 +464,7 @@ export function App({
             hasSelected={Boolean(selected)}
             pageIndex={pageIndex}
             hasNext={Boolean(nextCursor)}
+            locale={locale}
             onPrev={onPrevPage}
             onNext={onNextPage}
             onSelect={select}
@@ -459,6 +500,8 @@ export function App({
               selected={selected}
               currentTitle={currentTitle}
               currentHarness={currentHarness}
+              scrollContainerRef={surface}
+              onHeroVisibility={setHeroHidden}
               onSelect={select}
               retry={refresh}
               t={t}

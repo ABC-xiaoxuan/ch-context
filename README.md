@@ -9,7 +9,7 @@ The marketplace package follows CodexHost's [Host extension development guide](h
 - Root `manifest.json` with **`manifestVersion: 2`**.
 - A standard ESM `web` entry exporting `activate(api)`.
 - Main-panel and settings contributions through the public `WebExtensionApi`.
-- Owned Shadow DOM with scoped CSS, self-contained React, abort/dispose cleanup and extension-owned language preferences.
+- Owned Shadow DOM with scoped CSS, self-contained React, bundled offline Inter Variable Latin typography, abort/dispose cleanup and extension-owned language, palette, density and font preferences.
 - **CH Web only**, with no `desktop`, `page`, `widget` or `backend` declaration. No extension backend process is started.
 - No private React/Cordis objects, ModuleLoader integration or credential files are used by the native entry. Data reads use the existing authenticated, same-origin Web client channel.
 
@@ -27,11 +27,12 @@ First marketplace registration requires the catalog maintainers' review. A publi
 
 ## Features
 
-- `dsh-context`-inspired Apple Neutral UI layout: top Context Stats ledger (5 summary wells + 2×2 clickable category ledger), paired Token Stats donut & Performance/Cache card with loaded-window activity sequence strip, and a linked split workbench.
-- Inline-expandable Context Browser: category accordions with subtle corner tinting, in-place structured tool-call argument tables and nested result cards, Find-in-Record match highlighting, a toggleable loaded-window character-volume treemap (strictly by text character length, never estimated tokens), and scoped keyboard shortcuts (`/` search, `[` / `]` step filtered records, `Esc` clear).
-- Full-width File Activity card (read/write/search filters, path search, sorting, extension badges and expandable operation trails), full-width 2-pane Command Executions card (summary KPIs, attention callouts, searchable program distribution bars, inline output previews), and visual Session Network node tree.
+- Hero-first Apple Graphite UI with bundled offline Inter Variable typography (paired with CJK system fonts and optional Mono Metrics / System font presets), extension-owned palette options (Apple Graphite, Warm Paper, Precision Slate) and Standard/Compact density settings stored inside extension preferences.
+- Top Current Context hero gauge + Token Stats donut, paired Performance/Cache card and Window Hotspots & Clues card (top 3 largest records strictly by text character length, repeated file access and failed command alerts, clickable tool/program chips), plus a sticky header with an out-of-flow floating occupancy pill when scrolled past the hero.
+- Linked Activity Timeline & Context Browser workbench: bidirectional filter highlighting on the timeline, inline-expandable category accordions, structured tool-call argument tables, lossless read-only JSON tree viewer (preserving exact large integers and duplicate keys), full-width Focus Reader modal, Find-in-Record match highlighting, toggleable character-volume treemap and scoped keyboard shortcuts (`/` search, `[` / `]` step filtered records, `Esc` clear).
+- Dockable bottom panels (`All panels`, `File activity`, `Command executions`, `Session network`) with read/write/search filters, command KPIs and searchable program distribution bars, inline output previews and visual Session Network node tree.
 - One-click Diagnostic Report export (copy Markdown or download `.md` / `.json`) summarizing reported usage, loaded-window activity, files, commands and relationships without inventing missing metrics.
-- Context Insights Overview dashboard with 2×3 KPI tiles, queried-session usage comparison chart, aggregate token distribution, 8-week updated-date activity heatmap, workspace/harness breakdowns, high-context and relation quick filters, and up to 3-session side-by-side comparison.
+- Context Insights Overview dashboard with 2×3 KPI tiles, horizontal queried-session usage comparison bars, aggregate token distribution, 12-week updated-date activity heatmap, workspace/harness breakdowns, high-context and relation quick filters, up to 3-session side-by-side comparison with honest extremum highlights and Markdown copy, and overview `.csv` / summary Markdown exports.
 - Markdown messages, tables, code blocks, raw-text view and copying. Raw mode preserves retained text verbatim; HTML stays escaped and remote images remain explicit links.
 - Host context occupancy and window capacity, separate from cumulative billed usage. Unknown values stay `—` (never fabricated zeros).
 - English/Chinese UI, Light/Dark theme support and responsive container layouts.
@@ -50,7 +51,7 @@ npm run pack:market
 
 `npm run check` performs strict type checking, focused Node tests, both builds, and native/compatibility package validation. Browser commands require installed Chrome/Edge/Chromium; set `CH_CONTEXT_CHROME_PATH` when needed. Synthetic fixtures exercise UI and lifecycle without model turns or real conversation data.
 
-`npm run pack:market` creates `dist/ch-context-0.3.4.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
+`npm run pack:market` creates `dist/ch-context-0.4.1.zip` and its SHA-256 file. The ZIP contains only the native manifest, prebuilt ESM/CSS, declared raster assets, documentation and licenses. ZIP timestamps and text line endings are normalized. Release images are also attached individually for the official registry's byte comparison.
 
 Tracked prebuilt files `web/index.mjs`, `web/style.css` and `lib/client.js` must be rebuilt with source changes. CI rejects stale artifacts. Never change published ZIP bytes without increasing the manifest version.
 

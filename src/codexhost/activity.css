@@ -1,3 +1,51 @@
+.ch-dock-bar {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  background: var(--ch-well);
+  border: 1px solid var(--ch-border);
+  border-radius: 9px;
+  align-self: flex-start;
+  max-width: 100%;
+}
+.ch-dock-tab {
+  border: 0;
+  background: transparent;
+  color: var(--ch-muted);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.ch-dock-tab:hover {
+  background: var(--ch-well-hover);
+  color: var(--ch-ink);
+}
+.ch-dock-tab.is-active {
+  background: var(--ch-seg-active-bg);
+  color: var(--ch-seg-active-fg);
+  box-shadow: var(--ch-seg-active-shadow);
+  font-weight: 600;
+}
+.ch-dock-cnt {
+  font-family: var(--ch-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  opacity: 0.78;
+}
+.ch-dock-err-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ch-danger);
+}
 .ch-fa-head-right {
   display: inline-flex;
   align-items: center;
@@ -6,8 +54,9 @@
 }
 .ch-fa-filter button.is-all.is-active,
 .ch-cmd-filter button.is-all.is-active {
-  background: var(--ch-blue);
-  color: #fff;
+  background: var(--ch-seg-active-bg);
+  color: var(--ch-seg-active-fg);
+  box-shadow: var(--ch-seg-active-shadow);
 }
 .ch-fa-filter button.is-read {
   color: var(--ch-blue);
@@ -80,11 +129,7 @@
   border-radius: 7px;
   min-width: 0;
   flex-shrink: 0;
-}
-.ch-file-item:not(.is-open),
-.ch-command-row:not(.is-open) {
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 31px;
+  contain: layout style;
 }
 .ch-file-item:nth-child(even):not(.is-open),
 .ch-command-row:nth-child(even):not(.is-open) {
@@ -160,25 +205,25 @@
   text-align: center;
   flex-shrink: 0;
   color: #fff;
-  background: #636366;
+  background: #52525b;
 }
 .ch-ext-badge.is-ts {
-  background: #3178c6;
+  background: #2b64a6;
 }
 .ch-ext-badge.is-tsx {
-  background: #4f46e5;
+  background: #4338ca;
 }
 .ch-ext-badge.is-js {
-  background: #b45309;
+  background: #9a5508;
 }
 .ch-ext-badge.is-css {
-  background: #7c3aed;
+  background: #6d48a8;
 }
 .ch-ext-badge.is-json {
-  background: #a16207;
+  background: #8a560b;
 }
 .ch-ext-badge.is-md {
-  background: #0d9488;
+  background: #0f766e;
 }
 .ch-file-path {
   font-size: 12px;
@@ -610,7 +655,7 @@
 }
 .ch-net-av.is-current {
   background: var(--ch-accent-soft);
-  color: var(--ch-blue);
+  color: var(--ch-accent-text);
 }
 .ch-net-av.is-child {
   background: color-mix(in srgb, var(--ch-purple) 15%, transparent);

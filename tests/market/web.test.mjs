@@ -35,6 +35,7 @@ test('native market Web entry', async (t) => {
     format: 'iife',
     globalName: 'MarketEntry',
     jsx: 'automatic',
+    loader: { '.woff2': 'binary' },
     define: { 'process.env.NODE_ENV': '"production"', __CH_CONTEXT_VERSION__: '"fixture"' },
   })
   const css = (await readFile('src/codexhost/styles.css', 'utf8')).replaceAll(
@@ -213,7 +214,7 @@ test('native market Web entry', async (t) => {
             stylesheet: '/web/style.css',
             hostHeight: '100%',
             innerHeight: '100%',
-            fontSize: '12px',
+            fontSize: '12.5px',
             dark: true,
             detachedThemeUnchanged: true,
             remaining: '<span id="native-child" class="ch-context">Native child</span>',
@@ -585,6 +586,50 @@ test('native market Web entry', async (t) => {
         }
       },
     )
+    await t.test('palette and density preferences sync across settings and main panel', async () => {
+      const page = await open()
+      try {
+        await page.evaluate(() => {
+          const fixture = window.start({ language: 'en', unrelated: { keep: true } })
+          fixture.panelSignal = new AbortController()
+          fixture.panels[0].render(document.querySelector('#panel'), fixture.panelSignal.signal)
+          window.mountSettings()
+        })
+        await page
+          .locator('#settings')
+          .getByRole('button', { name: 'Warm Paper', exact: true })
+          .waitFor()
+        await page.locator('#settings').getByRole('button', { name: 'Warm Paper', exact: true }).click()
+        await page.waitForFunction(
+          () =>
+            window.surface('#panel')?.querySelector('.ch-context')?.dataset.chPalette === 'paper',
+        )
+        await page.locator('#settings').getByRole('button', { name: 'Compact', exact: true }).click()
+        await page.waitForFunction(
+          () =>
+            window.surface('#panel')?.querySelector('.ch-context')?.dataset.chDensity === 'compact',
+        )
+        await page
+          .locator('#settings')
+          .getByRole('button', { name: 'Mono Metrics', exact: true })
+          .click()
+        await page.waitForFunction(
+          () =>
+            window.surface('#panel')?.querySelector('.ch-context')?.dataset.chFont ===
+            'mono-metrics',
+        )
+        const stored = await page.evaluate(() => window.current.state.writes.at(-1))
+        assert.deepEqual(stored, {
+          language: 'en',
+          unrelated: { keep: true },
+          palette: 'paper',
+          density: 'compact',
+          font: 'mono-metrics',
+        })
+      } finally {
+        await page.close()
+      }
+    })
     assert.deepEqual(browserErrors, [])
   } finally {
     await browser?.close()
